@@ -1,0 +1,25 @@
+name: Search conformance
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ["3.11", "3.12"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+        with:
+          python-version: ${{ matrix.python }}
+      - if: runner.os == 'Linux'
+        run: command -v rg || (sudo apt-get update && sudo apt-get install -y ripgrep)
+      - if: runner.os == 'Windows'
+        run: if (-not (Get-Command rg -ErrorAction SilentlyContinue)) { choco install ripgrep -y }
+      - run: python -m pip install .
+      - run: python -I -m unittest discover -s tests
+      - run: did-it-search check --json
