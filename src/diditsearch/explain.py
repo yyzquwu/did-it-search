@@ -56,9 +56,9 @@ class _Ripgrep:
 
             readers = (Thread(target=read, args=(proc.stdout, out, self.left)),
                        Thread(target=read, args=(proc.stderr, err, min(8192, self.left))))
-            for reader in readers:
-                reader.start()
             try:
+                for reader in readers:
+                    reader.start()
                 proc.wait(timeout=self.remaining())
             except subprocess.TimeoutExpired as exc:
                 raise _Incomplete("Search exceeded its time limit.") from exc
@@ -66,7 +66,8 @@ class _Ripgrep:
                 if proc.poll() is None:
                     proc.kill()
                 for reader in readers:
-                    reader.join()
+                    if reader.ident is not None:
+                        reader.join()
             self.left -= len(out) + len(err)
             if self.left < 0 or len(err) > 8192:
                 raise _Incomplete("Search exceeded its ripgrep output limit.")
@@ -180,7 +181,7 @@ def explain(pattern, path=".", glob=None, *, timeout=5.0):
     files_searched counts eligible text files searched, including empty files. NUL
     bytes after ripgrep's default decoding indicate binary data. An excluded input
     makes a miss partial. A confirmed text match takes precedence over exclusions
-    and incomplete coverage. A resource limit or I/O failure makes the count unknown.
+    and incomplete coverage. The count is unknown if the eligible search is interrupted.
 
     One deadline covers all ripgrep phases, with a shared 4 MiB output budget and
     at most 64 serial invocations. Coverage describes the files observed during
@@ -189,6 +190,7 @@ def explain(pattern, path=".", glob=None, *, timeout=5.0):
     started = time.monotonic()
     matched, searched, excluded, binary = False, 0, 0, 0
     target = None
+    count = None
     try:
         path = os.fspath(path)
         if (not isinstance(pattern, str) or not isinstance(path, str) or not path
@@ -205,8 +207,8 @@ def explain(pattern, path=".", glob=None, *, timeout=5.0):
             return _result("no_files", "Git metadata is outside the search scope.", 0)
         rg = _Ripgrep(started + timeout)
         positive_glob = bool(glob and not glob.startswith("!"))
-        selected = _selected(rg, target, directory, glob)
-        if not selected and (positive_glob or not directory):
+        selected = _selected(rg, target, directory, glob) if glob or not directory else None
+        if selected is not None and not selected and (positive_glob or not directory):
             return _result("no_files", "No files were selected by the requested scope.", 0)
 
         base = target if directory else target.parent
@@ -214,22 +216,19 @@ def explain(pattern, path=".", glob=None, *, timeout=5.0):
         filters = ("--hidden",) if positive_glob or not directory else ()
         eligible = _files(rg, root, "--no-require-git", *filters,
                           *_prune(target.relative_to(root).parts))
-        if directory and not positive_glob:
+        eligible = {name for name in eligible if name.is_relative_to(target)} if directory else eligible & {target}
+        if directory and selected is not None and not positive_glob:
             # A native ignore whitelist can make a hidden file visible.
-            native = {name for name in eligible if name.is_relative_to(target)}
-            if not glob:
-                selected |= native
-            elif any(part.startswith(".") for name in native - selected
+            if any(part.startswith(".") for name in eligible - selected
                      for part in name.relative_to(target).parts):
-                selected |= native & _files(rg, target, "--hidden", "--no-ignore", "--glob", glob)
-        if not selected:
+                selected |= eligible & _files(rg, target, "--hidden", "--no-ignore", "--glob", glob)
+        if selected is not None and not selected:
             return _result("no_files", "No files were selected by the requested scope.", 0)
-        excluded = len(selected - eligible)
         multiline = ("--multiline",) if "\n" in pattern else ()
         literal = ("--fixed-strings", "--case-sensitive", *multiline, "-e", pattern)
         limit = _ARG_LIMIT - _arg_size((*rg.command, *_SCAN, "--files-with-matches", *literal, "--")) - 128
         incomplete = False
-        for batch in _batches(eligible & selected, base, limit):
+        for batch in _batches(eligible if selected is None else eligible & selected, base, limit):
             code, out, err = rg.run(base, *_SCAN, "--text", "--files-without-match", "-e", r"\x00", "--", *batch)
             text = _names(out)
             if code in (0, 1) and not err:
@@ -244,13 +243,20 @@ def explain(pattern, path=".", glob=None, *, timeout=5.0):
                 incomplete |= code not in (0, 1) or bool(err)
         if incomplete:
             raise _Incomplete("Ripgrep could not read or search all eligible files.")
+        count = searched
+        if selected is None:
+            # A large ignored tree should not prevent finding a match in eligible files.
+            selected = eligible | _selected(rg, target, directory, None)
+        if not selected:
+            return _result("no_files", "No files were selected by the requested scope.", 0)
+        excluded = len(selected - eligible)
     except (FileNotFoundError, NotADirectoryError):
         if target is None:
             return _result("missing_path", "The requested path does not exist.", 0)
-        return _result("matched" if matched else "partial", "The search scope changed during the search.")
+        return _result("matched" if matched else "partial", "The search scope changed during the search.", count)
     except _Incomplete as exc:
         detail = f"Found a literal match. {exc}" if matched else str(exc)
-        return _result("matched" if matched else "partial", detail)
+        return _result("matched" if matched else "partial", detail, count)
     except (OSError, ValueError, TypeError) as exc:
         return _result("error", str(exc))
 

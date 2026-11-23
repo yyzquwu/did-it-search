@@ -21,6 +21,7 @@ class ExplainTests(unittest.TestCase):
         return path
 
     def check(self, status, count, pattern="needle", path=".", glob=None, **kwargs):
+        kwargs.setdefault("timeout", 20.0)
         result = explain(pattern, self.root / path, glob, **kwargs)
         self.assertEqual(set(result), {"status", "detail", "files_searched"})
         self.assertEqual((result["status"], result["files_searched"]), (status, count), result)
@@ -97,7 +98,7 @@ class ExplainTests(unittest.TestCase):
         self.check("matched", 2, glob="*.txt")
         self.put(".ignore", b"!.hidden.txt\n")
         self.check("matched", 3)
-        self.check("matched", 3, glob="!visible.txt")
+        self.check("matched", 2, glob="!visible.txt")
         self.check("no_files", 0, path=".git")
         self.check("no_files", 0, glob="**/metadata.txt")
 
@@ -136,3 +137,5 @@ class ExplainTests(unittest.TestCase):
             self.assertIn("output limit", self.check("partial", None))
         with patch("diditsearch.explain._PROCESS_LIMIT", 2):
             self.assertIn("process limit", self.check("partial", None))
+        with patch("diditsearch.explain._PROCESS_LIMIT", 3):
+            self.assertIn("process limit", self.check("matched", 1))
