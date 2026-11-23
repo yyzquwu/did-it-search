@@ -150,6 +150,33 @@ def _selected(rg, target, directory, glob):
                   *_prune(target.relative_to(base).parts)) & {target}
 
 
+def _outer_allowed(rg, outer, target, eligible):
+    opts = list(_prune(target.relative_to(outer).parts))
+    if target.is_dir():
+        # Keep the paths to eligible files. Prune all sibling directories before
+        # ripgrep loads their ignore files, even when VCS filtering is disabled.
+        parents = set()
+        for path in eligible:
+            parent = path.parent
+            while parent not in parents and parent.is_relative_to(target):
+                parents.add(parent)
+                parent = parent.parent
+        size = _arg_size(opts)
+        for parent in parents:
+            with os.scandir(parent) as entries:
+                for entry in entries:
+                    rg.remaining()
+                    path = parent / entry.name
+                    if path in parents or entry.name == ".git" or not entry.is_dir(follow_symlinks=False):
+                        continue
+                    rule = "!/" + "/".join(map(_literal_glob, path.relative_to(outer).parts))
+                    size += _arg_size(("--glob", rule)) + 2
+                    if size > _ARG_LIMIT:
+                        raise _Incomplete("Search scope exceeded the command-line size limit.")
+                    opts.extend(("--glob", rule))
+    return eligible & _files(rg, outer, "--hidden", "--no-ignore-vcs", *opts)
+
+
 def _batches(files, base, limit):
     batch, used = [], 0
     for path in sorted(files):
@@ -228,8 +255,7 @@ def explain(pattern, path=".", glob=None, *, timeout=5.0):
             outer = next((p for p in reversed(root.parents)
                           if (p / ".ignore").is_file() or (p / ".rgignore").is_file()), None)
             if outer is not None:
-                eligible &= _files(rg, outer, "--hidden", "--no-ignore-vcs",
-                                   *_prune(target.relative_to(outer).parts))
+                eligible = _outer_allowed(rg, outer, target, eligible)
         multiline = ("--multiline",) if "\n" in pattern else ()
         literal = ("--fixed-strings", "--case-sensitive", *multiline, "-e", pattern)
         limit = _ARG_LIMIT - _arg_size((*rg.command, *_SCAN, "--files-with-matches", *literal, "--")) - 128

@@ -131,6 +131,21 @@ class ExplainTests(unittest.TestCase):
                 rule.unlink()
                 self.check("matched", 1, path="inner/main.py")
 
+    def test_outer_rule_preserves_selection_and_skips_ignored_subtrees(self):
+        (self.root / "inner/.git").mkdir(parents=True)
+        self.put("inner/.ignore", b"!.visible\n")
+        self.put("inner/.visible", b"needle\n")
+        self.put(".ignore", b"/inner/\n")
+        self.assertIn("ignored", self.check("partial", 0, path="inner"))
+        self.put(".ignore", b"/unrelated/\n")
+        self.put("inner/.gitignore", b"generated/\n")
+        self.put("inner/generated/.ignore", b"[\n")
+        self.put("inner/generated/nested/file", b"ignored\n")
+        self.check("matched", 1, path="inner")
+        for i in range(70):
+            self.put(f"inner/pkgs/pkg{i}/main.py", b"other\n")
+        self.check("matched", 71, path="inner", timeout=30)
+
     def test_linked_paths_and_descendants(self):
         self.put("outside/file.txt", b"needle")
         self.put("scope/file.txt", b"different")
