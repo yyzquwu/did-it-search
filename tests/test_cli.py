@@ -24,6 +24,9 @@ class CliTests(unittest.TestCase):
                 self.assertIn(term, demo.stdout)
             report = self.run_cli("check", "--json", cwd=tmp)
             self.assertEqual((report.returncode, json.loads(report.stdout)["passed"]), (0, 6))
+            standalone = self.run_cli("check", "--json", "--adapter",
+                                      str(ROOT / "examples" / "reference_adapter.py"), cwd=tmp)
+            self.assertEqual((standalone.returncode, json.loads(standalone.stdout)["passed"]), (0, 6))
             sample = self.run_cli("check", "--json", "--adapter", "examples/plain_rg.py", cwd=ROOT)
             self.assertEqual(sample.returncode, 1, sample.stderr)
             report = json.loads(sample.stdout)

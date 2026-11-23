@@ -6,6 +6,7 @@ import subprocess
 from pathlib import Path
 
 _MAX_FILE_BYTES = 1024 * 1024
+_is_reserved = getattr(os.path, "isreserved", lambda name: Path(name).is_reserved())
 
 
 def _rg(root: Path, *args: str, data: bytes | None = None) -> subprocess.CompletedProcess:
@@ -68,7 +69,7 @@ def inspect_search(root: Path, request: dict) -> dict:
         raise ValueError("Search inputs cannot contain NUL bytes")
     target = Path(path)
     if target.anchor or ".." in target.parts or (os.name == "nt" and any(
-        Path(part).is_reserved() or ":" in part or part.endswith((".", " "))
+        _is_reserved(part) or ":" in part or part.endswith((".", " "))
         for part in target.parts
     )):
         raise ValueError("Search path must stay relative to the fixture root")

@@ -19,7 +19,7 @@ did-it-search check --json --adapter examples/plain_rg.py
 did-it-search fixtures search-fixtures
 ```
 
-The reference passes all six cases. The example wraps ordinary ripgrep output and handles a missing path. It passes three cases and exits 1. The last command writes six repositories and `cases.json` to a new directory so you can open a case in your own agent. Run the installed CLI as `python -m diditsearch` when preferred.
+The reference passes all six cases. The example wraps ordinary ripgrep output and handles a missing path. It passes three cases and exits 1. Try `did-it-search check --adapter examples/reference_adapter.py` for a passing external adapter. The last command above writes six repositories and `cases.json` to a new directory so you can open a case in your own agent. Run the installed CLI as `python -m diditsearch` when preferred.
 
 | Fixture | Search truth | Expected status | Exclusions |
 | --- | --- | --- | --- |
