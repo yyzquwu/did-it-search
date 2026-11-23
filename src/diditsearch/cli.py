@@ -76,9 +76,9 @@ def main(argv=None) -> int:
             if adapter:
                 first = Path(adapter[0])
                 if first.suffix.lower() == ".py":
-                    adapter = [sys.executable, str(first.resolve(strict=True)), *adapter[1:]]
+                    adapter = [sys.executable, str(first.absolute()), *adapter[1:]]
                 elif first.parent != Path(".") or "/" in adapter[0] or "\\" in adapter[0]:
-                    adapter = [str(first.resolve(strict=True)), *adapter[1:]]
+                    adapter = [str(first.absolute()), *adapter[1:]]
             report = run_checks(cases, adapter=adapter, timeout=args.timeout)
         if args.json:
             print(json.dumps(report, indent=2, allow_nan=False))

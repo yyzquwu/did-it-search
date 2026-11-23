@@ -33,6 +33,8 @@ class CliTests(unittest.TestCase):
             self.assertEqual((report["passed"], report["errors"]), (3, 0))
             missing = self.run_cli("check", "--json", "--adapter", "not-a-real-adapter-1826", cwd=tmp)
             self.assertEqual((missing.returncode, json.loads(missing.stdout)["errors"]), (2, 6))
+            missing_script = self.run_cli("check", "--json", "--adapter", "missing.py", cwd=tmp)
+            self.assertEqual((missing_script.returncode, json.loads(missing_script.stdout)["errors"]), (2, 6))
             exported = self.run_cli("fixtures", str(dest), cwd=tmp)
             self.assertEqual(exported.returncode, 0, exported.stderr)
             records = json.loads((dest / "cases.json").read_bytes())
