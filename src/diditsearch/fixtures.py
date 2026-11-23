@@ -1,6 +1,7 @@
 """Small repositories with independently specified search outcomes."""
 
 import os
+import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,6 +22,9 @@ def make_fixtures(root: Path) -> list[Case]:
     root.mkdir(exist_ok=True)
     if any(root.iterdir()):
         raise ValueError(f"Fixture root must be empty: {root}")
+    git = shutil.which("git")
+    if not git:
+        raise OSError("Git (git) must be available on PATH to create the fixtures")
 
     specs = [
         ("hit", "dispatch_event", ".", None, "matched",
@@ -48,7 +52,7 @@ def make_fixtures(root: Path) -> list[Case]:
         case_root = root / id_
         case_root.mkdir()
         subprocess.run(
-            ["git", "-c", "init.defaultBranch=main", "init", "-q", "--template="],
+            [git, "-c", "init.defaultBranch=main", "init", "-q", "--template="],
             cwd=case_root, check=True,
             env={k: v for k, v in os.environ.items() if not k.upper().startswith("GIT_")},
         )

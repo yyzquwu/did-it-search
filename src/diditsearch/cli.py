@@ -4,6 +4,7 @@ import json
 import os
 import subprocess
 import sys
+from contextlib import contextmanager
 from importlib.metadata import version
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -13,9 +14,23 @@ from .reference import inspect_search
 from .runner import run_checks
 
 
+@contextmanager
+def _workspace():
+    tmp = TemporaryDirectory(prefix="did-it-search-")
+    try:
+        yield Path(tmp.name)
+    finally:
+        try:
+            tmp.cleanup()
+        except OSError as exc:
+            print(f"did-it-search: could not remove temporary fixtures at {tmp.name}: {exc}", file=sys.stderr)
+
+
 def _export(dest: Path) -> None:
     if os.path.lexists(dest):
         raise FileExistsError(f"Choose a new directory: {dest}")
+    if not dest.parent.is_dir():
+        raise NotADirectoryError(f"Fixture destination parent must exist: {dest.parent}")
     with TemporaryDirectory(dir=dest.parent) as tmp:
         stage = Path(tmp)
         cases = make_fixtures(stage)
@@ -34,7 +49,10 @@ def _export(dest: Path) -> None:
 def _demo(cases) -> None:
     case = next(c for c in cases if c.id == "ignored-caller")
     cmd = ["rg", "--no-config", "-F", "--", case.request["pattern"], "."]
-    raw = subprocess.run(cmd, cwd=case.root, capture_output=True, check=False)
+    try:
+        raw = subprocess.run(cmd, cwd=case.root, capture_output=True, check=False)
+    except FileNotFoundError as exc:
+        raise OSError("ripgrep (rg) must be available on PATH") from exc
     if raw.returncode not in (0, 1):
         raise ValueError(raw.stderr.decode("utf-8", "replace").strip() or "ripgrep could not run")
     answer = inspect_search(case.root, case.request)
@@ -67,8 +85,8 @@ def main(argv=None) -> int:
         if args.cmd == "fixtures":
             _export(args.directory)
             return 0
-        with TemporaryDirectory(prefix="did-it-search-") as tmp:
-            cases = make_fixtures(Path(tmp))
+        with _workspace() as tmp:
+            cases = make_fixtures(tmp)
             if args.cmd == "demo":
                 _demo(cases)
                 return 0

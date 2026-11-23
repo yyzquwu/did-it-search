@@ -1,10 +1,15 @@
 import json
 import os
+from contextlib import redirect_stderr, redirect_stdout
+from io import StringIO
 from pathlib import Path
 import subprocess
 import sys
 import unittest
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
+
+from diditsearch.cli import main
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -54,6 +59,22 @@ class CliTests(unittest.TestCase):
             report = json.loads(result.stdout)
             self.assertEqual((result.returncode, report["passed"], report["errors"]), (1, 0, 0))
             self.assertEqual(report["cases"][-2]["actual"], "partial")
+
+    def test_cleanup_error_preserves_completed_report_and_exit(self):
+        cleanup = TemporaryDirectory.cleanup
+
+        def locked(tmp):
+            cleanup(tmp)
+            raise PermissionError("fixture still in use")
+
+        with patch.object(TemporaryDirectory, "cleanup", locked):
+            for adapter, code, passed in (([], 0, 6), (["--adapter", str(ROOT / "examples/plain_rg.py")], 1, 3)):
+                out, err = StringIO(), StringIO()
+                with self.subTest(code=code), redirect_stdout(out), redirect_stderr(err):
+                    self.assertEqual(main(["check", "--json", *adapter]), code)
+                    self.assertEqual(json.loads(out.getvalue())["passed"], passed)
+                    self.assertIn("could not remove temporary fixtures", err.getvalue())
+                    self.assertIn("fixture still in use", err.getvalue())
 
     def test_inherited_git_dir_cannot_redirect_fixture_initialization(self):
         with TemporaryDirectory() as tmp:

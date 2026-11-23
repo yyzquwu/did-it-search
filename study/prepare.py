@@ -18,4 +18,10 @@ def prepare(dest: Path) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("destination", type=Path)
-    prepare(parser.parse_args().destination)
+    dest = parser.parse_args().destination
+    try:
+        prepare(dest)
+    except FileExistsError:
+        parser.error(f"Choose a new directory: {dest}")
+    except OSError as exc:
+        parser.error(str(exc))

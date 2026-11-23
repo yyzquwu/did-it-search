@@ -1,6 +1,6 @@
 # Did It Search?
 
-A conformance kit for the answers repository search tools give coding agents. A normal miss, a glob selecting zero files, and an ignored caller can all produce empty stdout. Give your search adapter six tiny Git repositories and check whether it tells these situations apart.
+A conformance kit for the answers repository search tools give coding agents. When ripgrep is given an explicit search root such as `.`, a normal miss, a glob selecting zero files, and an ignored caller can all produce empty stdout. Give your search adapter six tiny Git repositories and check whether it tells these situations apart.
 
 ## See the ignored caller
 
@@ -43,13 +43,13 @@ Exit 0 means every case agreed with its answer key. Exit 1 means at least one an
 
 ### Adapter protocol
 
-The runner starts a new process in each fixture's root. It sends one UTF-8 JSON object on stdin. For example:
+The runner starts a new process in each fixture's root and sends one UTF-8 JSON object followed by a newline on stdin.
 
 ```json
 {"pattern":"legacy_export","path":".","glob":null}
 ```
 
-Return one UTF-8 JSON object on stdout (up to 64 KiB) and exit 0 when your tool can describe the outcome. Diagnostic logs may go to stderr.
+Return one UTF-8 JSON object without a byte-order mark on stdout (up to 64 KiB) and exit 0 when your tool can describe the outcome. Diagnostic logs may go to stderr. If your adapter keeps a fixture open and cleanup fails, the runner preserves the report and its exit status. Stderr identifies the temporary directory for later removal.
 
 ```json
 {"status":"partial","detail":"An ignored file was outside the text search.","skipped":["ignored"]}
@@ -65,6 +65,6 @@ In a three-project pilot, each of three agents got the same initial result for t
 
 ## Reference scope
 
-The reference searches small, stable fixtures. It includes dotfiles, skips Git metadata and links, and honors in-tree ignore rules even with a positive glob. It enumerates filenames under ignored directories to account for exclusions. It reads up to 1 MiB plus one byte per eligible file to identify binary or oversized inputs. A confirmed hit takes precedence and still reports exclusions. The six fixtures exercise text search. They do not measure language-level references, model accuracy, or performance on arbitrary repositories.
+The reference searches small, stable fixtures. It includes dotfiles and skips Git metadata and links. It applies the glob and in-tree ignore rules even to explicitly named files. Native ripgrep can search a named file that these rules exclude. The reference enumerates filenames under ignored directories to account for exclusions. It reads up to 1 MiB plus one byte per eligible file to identify binary or oversized inputs. A UTF-16 file containing NUL bytes is classified as binary, even though native ripgrep can decode a UTF-16 BOM. A confirmed hit takes precedence and still reports exclusions.
 
 Run the tests from an installed checkout with `python -m unittest discover -s tests`.

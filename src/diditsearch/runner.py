@@ -31,6 +31,9 @@ def _command(argv):
         exe = next((p.absolute() for d in os.get_exec_path() for name in names
                     if (p := Path(d) / name).is_file() and os.access(p, os.X_OK)), None)
         if exe is None:
+            if os.name == "nt" and any((Path(d) / (argv[0] + ext)).is_file()
+                                      for d in os.get_exec_path() for ext in (".cmd", ".bat")):
+                raise _AdapterError("Adapter configuration error: Windows batch files require a shell")
             raise _AdapterError(f"Adapter launch error: executable {argv[0]!r} was not found on PATH")
     if os.name == "nt" and exe.name.rstrip(" .").lower().endswith((".bat", ".cmd")):
         raise _AdapterError("Adapter configuration error: Windows batch files require a shell")
@@ -75,7 +78,7 @@ def _adapter_result(case, argv, timeout):
     # when a descendant inherits the adapter's standard streams.
     try:
         with TemporaryFile() as stdin, TemporaryFile() as stdout, TemporaryFile() as stderr:
-            stdin.write(data)
+            stdin.write(data + b"\n")
             stdin.seek(0)
             with subprocess.Popen(argv, cwd=case.root, stdin=stdin, stdout=stdout, stderr=stderr,
                                   start_new_session=os.name != "nt") as process:

@@ -46,7 +46,9 @@ class RunnerTests(unittest.TestCase):
             "import json, pathlib, sys\n"
             "assert sys.argv[1] == '& | > argument'\n"
             "assert pathlib.Path('marker').is_file()\n"
-            "request = json.loads(sys.stdin.buffer.read().decode('utf-8'))\n"
+            "raw = sys.stdin.buffer.readline()\n"
+            "assert raw.endswith(b'\\n') and not sys.stdin.buffer.read()\n"
+            "request = json.loads(raw.decode('utf-8'))\n"
             "assert request == {'pattern': 'caf\\u00e9', 'path': '.', 'glob': None}\n"
             "sys.stderr.buffer.write(b'debug\\xff')\n"
             "sys.stdout.buffer.write(' {\"status\": \"matched\", \"detail\": \"caf\\u00e9\"}\\n'.encode('utf-8'))\n",
