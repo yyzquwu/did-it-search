@@ -1,0 +1,100 @@
+name: Publish v0.4.0 to PyPI
+
+on:
+  workflow_dispatch:
+    inputs:
+      reviewed_commit:
+        description: Full commit SHA reviewed for tag v0.4.0
+        required: true
+        type: string
+      wheel_sha256:
+        description: Reviewed SHA256 of did_it_search-0.4.0-py3-none-any.whl
+        required: true
+        type: string
+      sdist_sha256:
+        description: Reviewed SHA256 of did_it_search-0.4.0.tar.gz
+        required: true
+        type: string
+
+permissions: {}
+
+concurrency:
+  group: pypi-v0.4.0
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      artifact-id: ${{ steps.stage.outputs.artifact-id }}
+    steps:
+      - name: Verify reviewed GitHub release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REVIEWED_COMMIT: ${{ inputs.reviewed_commit }}
+          WHEEL_SHA256: ${{ inputs.wheel_sha256 }}
+          SDIST_SHA256: ${{ inputs.sdist_sha256 }}
+        run: |
+          tag=v0.4.0
+          wheel=did_it_search-0.4.0-py3-none-any.whl
+          sdist=did_it_search-0.4.0.tar.gz
+
+          if [[ ! "$REVIEWED_COMMIT" =~ ^[[:xdigit:]]{40}$ ||
+                ! "$WHEEL_SHA256" =~ ^[[:xdigit:]]{64}$ ||
+                ! "$SDIST_SHA256" =~ ^[[:xdigit:]]{64}$ ]]; then
+            echo 'Supply a full 40-digit commit SHA and two 64-digit SHA256 digests.' >&2
+            exit 1
+          fi
+          if [[ "$GITHUB_REF" != "refs/tags/$tag" || "$GITHUB_SHA" != "${REVIEWED_COMMIT,,}" ]]; then
+            echo 'Dispatch on v0.4.0 at the reviewed commit.' >&2
+            exit 1
+          fi
+
+          draft=$(gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')
+          if [[ "$draft" != false ]]; then
+            echo 'Publish the tagged GitHub Release before dispatching.' >&2
+            exit 1
+          fi
+          gh release download "$tag" --repo "$GITHUB_REPOSITORY" --dir dist \
+            --pattern "$wheel" --pattern "$sdist"
+
+          tag_commit=$(gh api "repos/$GITHUB_REPOSITORY/commits/refs/tags/$tag" --jq '.sha')
+          if [[ "$tag_commit" != "$GITHUB_SHA" ]]; then
+            echo 'The current release tag does not resolve to the reviewed commit.' >&2
+            exit 1
+          fi
+          cd dist
+          printf '%s  %s\n' "${WHEEL_SHA256,,}" "$wheel" "${SDIST_SHA256,,}" "$sdist" |
+            sha256sum --check --strict
+
+      - name: Stage verified distributions
+        id: stage
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: reviewed-v0.4.0-${{ github.run_attempt }}
+          path: |
+            dist/did_it_search-0.4.0-py3-none-any.whl
+            dist/did_it_search-0.4.0.tar.gz
+          if-no-files-found: error
+
+  publish:
+    needs: verify
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - name: Retrieve verified distributions
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ needs.verify.outputs.artifact-id }}
+          path: dist
+          digest-mismatch: error
+
+      - name: Publish with PyPI Trusted Publishing
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
+        with:
+          packages-dir: dist/

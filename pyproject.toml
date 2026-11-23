@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "did-it-search"
-version = "0.3.0"
-description = "Conformance fixtures for the answers repository search tools give coding agents."
+version = "0.4.0"
+description = "Explain repository search failures and check for regressions in the answers search tools give coding agents."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = []

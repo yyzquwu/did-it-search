@@ -28,6 +28,16 @@ jobs:
         run: if (-not (Get-Command rg -ErrorAction SilentlyContinue)) { choco install ripgrep -y }
       - run: python -m pip install .
       - run: python -I -m unittest discover -s tests
+      - name: Verify the installed explain quickstart
+        shell: python
+        run: |
+          import json
+          import subprocess
+          cmd = ["did-it-search", "explain", "createGrepTool", "src/diditsearch", "--json"]
+          for flags, code, status in [(["--glob", "*.rs"], 1, "no_files"), ([], 0, "matched")]:
+              run = subprocess.run(cmd + flags, capture_output=True, text=True, timeout=30)
+              assert run.returncode == code, (run.stdout, run.stderr)
+              assert json.loads(run.stdout)["status"] == status, run.stdout
       - run: did-it-search check --json
       - name: Replay Pi's two pinned commits
         if: matrix.python == '3.12'

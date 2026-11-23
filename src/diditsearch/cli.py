@@ -150,6 +150,14 @@ def main(argv=None) -> int:
     parser.add_argument("--version", action="version", version=f"%(prog)s {version('did-it-search')}")
     sub = parser.add_subparsers(dest="cmd", required=True)
     sub.add_parser("demo", help="see a zero-match search with a real caller")
+    explain = sub.add_parser("explain", help="explain the scope of a local literal search", allow_abbrev=False,
+                             epilog="Place -- before PATTERN to pass a dash-prefixed literal or path.")
+    explain.add_argument("pattern", metavar="PATTERN")
+    explain.add_argument("path", nargs="?", default=".", metavar="PATH")
+    explain.add_argument("--glob", metavar="GLOB", help="restrict the files searched")
+    explain.add_argument("--timeout", type=float, default=5.0, metavar="SECONDS",
+                         help="total search time limit (default: 5)")
+    explain.add_argument("--json", action="store_true", help="print a machine-readable report")
     fixtures = sub.add_parser("fixtures", help="write the search repos and their answer key")
     fixtures.add_argument("directory", type=Path)
     check = sub.add_parser("check", help="grade the reference or your own search adapter")
@@ -180,6 +188,14 @@ def main(argv=None) -> int:
         sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
     if args.cmd == "check" and args.adapter == []:
         parser.error("--adapter needs a command or Python script")
+    if args.cmd == "explain":
+        from .explain_cli import explain_cmd
+
+        if argv is None:
+            for stream in (sys.stdout, sys.stderr):
+                if hasattr(stream, "reconfigure"):
+                    stream.reconfigure(encoding="utf-8", errors="backslashreplace")
+        return explain_cmd(args)
     try:
         if args.cmd in {"baseline", "compare"}:
             return _baseline_cmd(args)
