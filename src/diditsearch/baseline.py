@@ -125,7 +125,8 @@ def _report(report, cases):
         paths = {s for root in (case.root.absolute(), case.root.resolve())
                  for s in (str(root), root.as_posix())}
         roots = re.compile("(?:" + "|".join(re.escape(s) for s in sorted(paths, key=len, reverse=True))
-                           + r")([/\\]?)", re.IGNORECASE if os.name == "nt" else 0)
+                           + r""")([/\\]|(?=[.,;:!?]*(?:$|[\s"'()`<>\[\]{}])))""",
+                           re.IGNORECASE if os.name == "nt" else 0)
         outcomes[id_] = _portable_evidence(outcome, roots)
     counts = {"passed": sum(row["passed"] for row in outcomes.values()), "total": len(outcomes),
               "errors": sum(row["actual"] is None for row in outcomes.values())}

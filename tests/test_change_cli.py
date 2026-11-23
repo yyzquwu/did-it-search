@@ -25,7 +25,12 @@ class ChangeCliTests(unittest.TestCase):
             self.assertEqual(saved["cases"][0]["raw"]["message"], "Path not found: <fixture>/absent")
             self.assertEqual(saved["cases"][0]["detail"], saved["cases"][0]["raw"]["message"])
             self.assertEqual(saved["cases"][0]["raw"]["<fixture>"], ["At <fixture>, search failed."])
-            self.assertNotIn(str(root), json.dumps(saved))
+            self.assertNotIn(json.dumps(str(root))[1:-1], json.dumps(saved))
+            for suffix in ("-archive", "2", ".bak"):
+                sibling = str(root) + suffix
+                row["raw"] = {sibling: "sibling", "<fixture>" + suffix: "literal marker"}
+                observed = record([case], report, {"name": "pi", "version": "1.5.1"})
+                self.assertEqual(observed["cases"][0]["raw"], row["raw"])
             tool = {"name": "@earendil-works/pi-coding-agent", "version": "1.5.1-rc.0+test.2"}
             saved = record([case], report, tool)
             saved["tool"]["version"] = "unknown"
