@@ -102,6 +102,24 @@ class ExplainTests(unittest.TestCase):
         self.check("no_files", 0, path=".git")
         self.check("no_files", 0, glob="**/metadata.txt")
 
+    def test_nested_repository_uses_its_own_gitignore(self):
+        (self.root / ".git").mkdir()
+        self.put(".gitignore", b"/child/\n")
+        self.put("child/main.py", b"needle\n")
+        (self.root / "child/.git").mkdir()
+        self.check("matched", 1, path="child")
+        self.check("matched", 1, path="child/main.py")
+
+    def test_explicit_and_reincluded_hidden_directories(self):
+        self.put(".github/workflows/ci.yml", b"needle\n")
+        self.check("matched", 1, path=".github/workflows")
+        self.put(".ignore", b"!.github/\n")
+        self.check("matched", 1, glob="*.yml")
+        self.put("outside.yml", b"other\n")
+        self.check("matched", 2, glob="*.yml")
+        self.put(".ignore", b".github/\n")
+        self.assertIn("ignored", self.check("partial", 0, path=".github/workflows"))
+
     def test_linked_paths_and_descendants(self):
         self.put("outside/file.txt", b"needle")
         self.put("scope/file.txt", b"different")

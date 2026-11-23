@@ -96,7 +96,9 @@ def _path(path):
 def _walk_root(directory):
     # Start above applicable ignore rules so an explicit path cannot bypass an ignored parent.
     root = directory
-    for parent in directory.parents:
+    for parent in (directory, *directory.parents):
+        if (parent / ".git").exists():
+            return parent
         if any((parent / name).exists() for name in _IGNORE_MARKERS):
             root = parent
     return root
@@ -206,29 +208,25 @@ def explain(pattern, path=".", glob=None, *, timeout=5.0):
         if Path(".git") in map(Path, target.parts):
             return _result("no_files", "Git metadata is outside the search scope.", 0)
         rg = _Ripgrep(started + timeout)
-        positive_glob = bool(glob and not glob.startswith("!"))
-        selected = _selected(rg, target, directory, glob) if glob or not directory else None
-        if selected is not None and not selected and (positive_glob or not directory):
-            return _result("no_files", "No files were selected by the requested scope.", 0)
-
         base = target if directory else target.parent
         root = _walk_root(base)
-        filters = ("--hidden",) if positive_glob or not directory else ()
-        eligible = _files(rg, root, "--no-require-git", *filters,
-                          *_prune(target.relative_to(root).parts))
-        eligible = {name for name in eligible if name.is_relative_to(target)} if directory else eligible & {target}
-        if directory and selected is not None and not positive_glob:
-            # A native ignore whitelist can make a hidden file visible.
-            if any(part.startswith(".") for name in eligible - selected
-                     for part in name.relative_to(target).parts):
-                selected |= eligible & _files(rg, target, "--hidden", "--no-ignore", "--glob", glob)
-        if selected is not None and not selected:
-            return _result("no_files", "No files were selected by the requested scope.", 0)
+        # Let ripgrep resolve hidden entries and explicit ignore negations together.
+        # Running from the requested directory also honors an explicitly named dot-directory.
+        glob_args = ("--glob", glob) if glob is not None else ()
+        scope = (_files(rg, target, "--no-require-git", *glob_args) if directory
+                 else _selected(rg, target, False, glob))
+        eligible = scope
+        if scope and (not directory or root != target or (glob and not glob.startswith("!"))):
+            # A positive glob or an explicit target can override an ignore. Require
+            # membership in an independent ignore-aware walk before reading file contents.
+            allowed = _files(rg, root, "--no-require-git", "--hidden",
+                             *_prune(target.relative_to(root).parts))
+            eligible = scope & allowed
         multiline = ("--multiline",) if "\n" in pattern else ()
         literal = ("--fixed-strings", "--case-sensitive", *multiline, "-e", pattern)
         limit = _ARG_LIMIT - _arg_size((*rg.command, *_SCAN, "--files-with-matches", *literal, "--")) - 128
         incomplete = False
-        for batch in _batches(eligible if selected is None else eligible & selected, base, limit):
+        for batch in _batches(eligible, base, limit):
             code, out, err = rg.run(base, *_SCAN, "--text", "--files-without-match", "-e", r"\x00", "--", *batch)
             text = _names(out)
             if code in (0, 1) and not err:
@@ -244,9 +242,8 @@ def explain(pattern, path=".", glob=None, *, timeout=5.0):
         if incomplete:
             raise _Incomplete("Ripgrep could not read or search all eligible files.")
         count = searched
-        if selected is None:
-            # A large ignored tree should not prevent finding a match in eligible files.
-            selected = eligible | _selected(rg, target, directory, None)
+        # Count excluded names after searching so a large ignored tree cannot hide a verified hit.
+        selected = scope | _selected(rg, target, directory, glob) if directory else scope
         if not selected:
             return _result("no_files", "No files were selected by the requested scope.", 0)
         excluded = len(selected - eligible)
