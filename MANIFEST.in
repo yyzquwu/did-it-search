@@ -1,3 +1,4 @@
 recursive-include examples *.py
 recursive-include tests *.py
 recursive-include study *.py *.md *.json
+include action.yml .github/run-action.py

@@ -9,6 +9,7 @@ from tempfile import TemporaryDirectory
 
 NODE = shutil.which("node")
 ADAPTER = Path(__file__).resolve().parents[1] / "src" / "diditsearch" / "pi_adapter.mjs"
+PACKAGE = "@earendil-works/pi-coding-agent"
 
 
 @unittest.skipUnless(NODE, "Node.js is required for Pi adapter tests")
@@ -50,6 +51,37 @@ class PiAdapterTests(unittest.TestCase):
         run = self.run_adapter(request)
         self.assertEqual(run.returncode, 0, run.stderr.decode("utf-8"))
         return json.loads(run.stdout)
+
+    def install_pi(self, project, version, label="caller package"):
+        pkg = project / "node_modules" / PACKAGE
+        (pkg / "dist").mkdir(parents=True)
+        (pkg / "package.json").write_text(json.dumps({
+            "name": PACKAGE, "version": version, "exports": {".": {"import": "./dist/sdk.mjs"}},
+        }), encoding="utf-8")
+        self.write_tool(f"return {{ content: [{{ type: 'text', text: 'file:1: from {label}' }}] }};")
+        self.module.rename(pkg / "dist" / "sdk.mjs")
+        return pkg
+
+    def identify(self):
+        return subprocess.run([NODE, str(ADAPTER), "--identify"], input=b"", cwd=self.fixture,
+                              env=self.env, capture_output=True, timeout=15)
+
+    def assert_identity(self, version):
+        run = self.identify()
+        self.assertEqual(run.returncode, 0, run.stderr.decode("utf-8"))
+        self.assertEqual(json.loads(run.stdout), {"name": PACKAGE, "version": version})
+
+    def assert_provenance_error(self):
+        run = self.identify()
+        self.assertEqual((run.returncode, run.stdout), (2, b""))
+        self.assertIn(b"SDK provenance", run.stderr)
+
+    def link_dir(self, link, target):
+        if os.name == "nt":
+            subprocess.run(["cmd", "/d", "/c", "mklink", "/J", str(link), str(target)],
+                           check=True, capture_output=True, timeout=15)
+        else:
+            link.symlink_to(target, target_is_directory=True)
 
     def test_literal_arguments_use_fixture_cwd_and_keep_native_match(self):
         self.env["DIDITSEARCH_PI_ROOT"] = "unused-root-when-pinned"
@@ -110,15 +142,70 @@ class PiAdapterTests(unittest.TestCase):
                 self.assertIn(f"Pi grep does not expose {message}", run.stderr.decode("utf-8"))
 
     def test_installed_package_import_is_anchored_at_the_caller(self):
-        project = self.root / "invoking project"
-        pkg = project / "node_modules" / "@earendil-works" / "pi-coding-agent"
-        pkg.mkdir(parents=True)
-        (pkg / "package.json").write_text('{"exports":{".":{"import":"./sdk.mjs"}}}', encoding="utf-8")
-        self.write_tool("return { content: [{ type: 'text', text: 'file:1: from caller package' }] };")
-        self.module.rename(pkg / "sdk.mjs")
+        ancestor = self.root / "invoking project"
+        project = ancestor / "packages" / "app"
+        caller = project / "src" / "nested"
+        caller.mkdir(parents=True)
+        self.install_pi(ancestor, "1.0.0", "ancestor package")
+        self.install_pi(self.fixture, "2.0.0", "fixture package")
+        pkg = self.install_pi(project, "3.0.0-beta.1+local")
+        (pkg / "dist" / "package.json").write_text(
+            json.dumps({"name": PACKAGE, "version": "9.0.0"}), encoding="utf-8",
+        )
+        self.env["DIDITSEARCH_PI_ROOT"] = str(caller)
+        self.env["DIDITSEARCH_PI_MODULE"] = "ignored-in-identify.mjs"
+        self.assert_identity("3.0.0-beta.1+local")
         del self.env["DIDITSEARCH_PI_MODULE"]
-        self.env["DIDITSEARCH_PI_ROOT"] = str(project)
         self.assertEqual(self.response()["detail"], "file:1: from caller package")
+
+    def test_identify_follows_linked_install_without_loading_sdk(self):
+        project = self.root / "linked project"
+        self.install_pi(self.root, "1.0.0", "ancestor package")
+        pkg = self.install_pi(self.root / "store", "4.0.0")
+        (pkg / "dist" / "sdk.mjs").write_text("throw new Error('SDK executed');", encoding="utf-8")
+        link = project / "node_modules" / PACKAGE
+        link.parent.mkdir(parents=True)
+        self.link_dir(link, pkg)
+        self.env["DIDITSEARCH_PI_ROOT"] = str(project)
+        self.assert_identity("4.0.0")
+
+    def test_identify_rejects_an_entry_linked_into_a_different_install(self):
+        project = self.root / "project"
+        pkg = self.install_pi(project, "3.0.0")
+        other = self.install_pi(self.root, "2.0.0", "ancestor package")
+        (pkg / "dist").rename(pkg / "original")
+        self.link_dir(pkg / "dist", other / "dist")
+        self.env["DIDITSEARCH_PI_ROOT"] = str(project)
+        self.assert_provenance_error()
+
+    def test_identify_rejects_missing_and_malformed_provenance(self):
+        project = self.root / "project"
+        pkg = self.install_pi(project, "3.0.0")
+        self.install_pi(self.root, "2.0.0", "ancestor package")
+        self.env["DIDITSEARCH_PI_ROOT"] = str(project)
+        manifest = pkg / "package.json"
+        original = json.loads(manifest.read_text(encoding="utf-8"))
+        manifest.write_text(json.dumps({k: v for k, v in original.items() if k != "version"}), encoding="utf-8")
+        self.assert_provenance_error()
+        for change in ({"version": None}, {"version": 3}, {"version": ""}, {"version": "3.0"},
+                       {"version": "3.0.0-01"}, {"name": "unrelated"}):
+            with self.subTest(change=change):
+                manifest.write_text(json.dumps(original | change), encoding="utf-8")
+                self.assert_provenance_error()
+        manifest.write_text("{", encoding="utf-8")
+        self.assert_provenance_error()
+        manifest.write_text(json.dumps(original), encoding="utf-8")
+        (pkg / "dist" / "sdk.mjs").unlink()
+        self.assert_provenance_error()
+
+    def test_identify_requires_a_caller_install(self):
+        self.write_tool("throw new Error('pinned replay module executed');")
+        self.assert_provenance_error()
+        external = self.root / "external"
+        self.install_pi(external, "3.0.0")
+        self.env["NODE_PATH"] = str(external / "node_modules")
+        self.env["DIDITSEARCH_PI_ROOT"] = str(self.fixture)
+        self.assert_provenance_error()
 
     def test_module_override_must_be_absolute(self):
         self.env["DIDITSEARCH_PI_MODULE"] = "grep.mjs"

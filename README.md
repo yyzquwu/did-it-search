@@ -1,13 +1,36 @@
 # Did It Search?
 
-A regression kit for repository search tools. In [Pi issue #11807](https://github.com/earendil-works/pi/issues/11807), a coding agent asked grep to look inside `repo` for `migrations/main/*.js`. The file was there. Pi started ripgrep one directory too high and returned `No matches found`.
+A pull request check for repository search. Pi 1.5.0 and 1.5.1 both fail the absolute conformance suite. Downgrading from 1.5.1 to 1.5.0 loses one previously working search: the caller in `migrations/main/a.js`. Did It Search? reports the newly lost match and keeps the three previously accepted differences quiet. [Example pull request](https://github.com/yyzquwu/did-it-search/pulls?q=is%3Apr+head%3Ademo%2Fpi-downgrade)
+
+## Add a search check to your project
+
+From a project with a local installation of `@earendil-works/pi-coding-agent`, install the kit and record today's behavior. Use Python 3.11+, Git, ripgrep on PATH, and Node 22.19+ (Node 24 recommended).
+
+```sh
+python -m pip install "git+https://github.com/yyzquwu/did-it-search.git@v0.3.0"
+did-it-search baseline --tool pi
+did-it-search compare --tool pi
+```
+
+Review and commit `.did-it-search.json`. The baseline records the installed package version, a fingerprint of the eight fixtures, and the outcomes you accept. Temporary fixture roots in the saved evidence are displayed as `<fixture>`. Use `baseline --replace` only when you intend to change those expectations. In a pull-request workflow with `contents: read`, set up Node and ripgrep and include these steps:
+
+```yaml
+- uses: actions/checkout@v7
+  with:
+    fetch-depth: 0
+    persist-credentials: false
+- run: npm ci
+- uses: yyzquwu/did-it-search@v0.3.0
+```
+
+On a PR the Action compares the candidate's installed SDK with the baseline from the PR's base commit. A contributor can inspect the package versions, request, expected result and native tool response in the job summary. New regressions and changed failures exit 1. Improvements and known failures pass. An incompatible baseline or a tool that couldn't run exits 2. Use `compare --json` to consume the comparison outside GitHub. The existing `check` command still grades absolute conformance.
 
 ## Replay the Pi fix
 
 Install Git, ripgrep (`rg`), and Node.js 22.19+ (tested with Node 24). With `uvx` available, run:
 
 ```sh
-uvx --from git+https://github.com/yyzquwu/did-it-search.git@v0.2.0 did-it-search replay pi
+uvx --from git+https://github.com/yyzquwu/did-it-search.git@v0.3.0 did-it-search replay pi
 ```
 
 The replay runs Pi's grep implementation from both sides of [the merged fix](https://github.com/earendil-works/pi/pull/11895) on two fixtures. Both requests ask for the literal `hello` under `repo` with the glob `migrations/main/*.js`. One fixture has the match at `repo/migrations/main/a.js`. The other puts the only match under `repo/nested/migrations/main/b.js`, outside the requested glob. That second case catches a fix that simply widens the search. Add `--json` to inspect the results.
@@ -25,7 +48,7 @@ The [recorded replay](study/pi-11895.json) contains the grades and native respon
 
 ### Grade your local Pi installation
 
-The local check loads `@earendil-works/pi-coding-agent` from the calling project's Node dependencies. On the target-file case, published versions 1.4.0 and 1.5.0 missed the match; 1.5.1 and 1.6.0 found it. Install the kit with `python -m pip install "git+https://github.com/yyzquwu/did-it-search.git@v0.2.0"`. From the project containing Pi, run:
+The local check loads `@earendil-works/pi-coding-agent` from the calling project's Node dependencies. On the target-file case, published versions 1.4.0 and 1.5.0 missed the match; 1.5.1 and 1.6.0 found it. From the project containing Pi, run:
 
 ```sh
 did-it-search check --tool pi --case glob-root-hit --case glob-root-decoy --json

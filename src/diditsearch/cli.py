@@ -7,7 +7,7 @@ import sys
 from contextlib import contextmanager
 from importlib.metadata import version
 from pathlib import Path
-from tempfile import TemporaryDirectory
+from tempfile import NamedTemporaryFile, TemporaryDirectory
 
 from .fixtures import make_fixtures
 from .reference import inspect_search
@@ -81,6 +81,66 @@ def _replay_pi(as_json: bool) -> int:
     return 2 if report["status"] == "infrastructure_error" else int(not report["passed"])
 
 
+def _pi_adapter():
+    env = dict(os.environ, DIDITSEARCH_PI_ROOT=str(Path.cwd()))
+    env.pop("DIDITSEARCH_PI_MODULE", None)
+    return ["node", str(Path(__file__).with_name("pi_adapter.mjs"))], env
+
+
+def _save_baseline(path, value, replace):
+    data = json.dumps(value, ensure_ascii=True, indent=2, allow_nan=False) + "\n"
+    with NamedTemporaryFile(dir=path.parent, prefix=".didit-", delete=False) as tmp:
+        name = Path(tmp.name)
+    try:
+        name.write_bytes(data.encode("utf-8"))
+        if replace:
+            os.replace(name, path)
+        else:
+            os.link(name, path)
+    finally:
+        name.unlink(missing_ok=True)
+
+
+def _baseline_cmd(args):
+    from .baseline import compare, record
+    from .summary import format_summary
+
+    creating = args.cmd == "baseline"
+    path = args.output if creating else args.baseline
+    if creating and not args.replace and os.path.lexists(path):
+        raise ValueError(f"Baseline already exists: {path}. Use --replace for an intentional update.")
+    if not creating:
+        baseline = json.loads(path.read_bytes(), object_pairs_hook=_unique_keys)
+    adapter, env = _pi_adapter()
+    identity = subprocess.run([*adapter, "--identify"], env=env, capture_output=True, timeout=60)
+    if identity.returncode:
+        raise ValueError(identity.stderr.decode("utf-8", "replace").strip() or "Pi identification failed")
+    tool = json.loads(identity.stdout)
+    with _workspace() as tmp:
+        cases = make_fixtures(tmp)
+        report = run_checks(cases, adapter=adapter, timeout=60, env=env)
+        if creating:
+            value = record(cases, report, tool)
+            _save_baseline(path, value, args.replace)
+            print(f"Recorded {len(cases)} search cases for {tool['name']} {tool['version']} in {path}")
+            return 0
+        result = compare(baseline, cases, report, tool)
+    if args.json:
+        print(json.dumps(result, indent=2, allow_nan=False))
+    else:
+        print(format_summary(result, markdown=args.markdown))
+    return result["exit_code"]
+
+
+def _unique_keys(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"Duplicate baseline key: {key}")
+        result[key] = value
+    return result
+
+
 def main(argv=None) -> int:
     if argv is None:
         for stream in (sys.stdout, sys.stderr):
@@ -105,10 +165,24 @@ def main(argv=None) -> int:
     replay = sub.add_parser("replay", help="reproduce a pinned upstream regression")
     replay.add_argument("tool", choices=["pi"])
     replay.add_argument("--json", action="store_true")
+    baseline = sub.add_parser("baseline", help="record a reviewable Pi search baseline")
+    baseline.add_argument("--tool", choices=["pi"], default="pi")
+    baseline.add_argument("--output", type=Path, default=Path(".did-it-search.json"))
+    baseline.add_argument("--replace", action="store_true", help="replace an existing baseline intentionally")
+    compare = sub.add_parser("compare", help="check for regressions against a reviewed baseline")
+    compare.add_argument("--tool", choices=["pi"], default="pi")
+    compare.add_argument("--baseline", type=Path, default=Path(".did-it-search.json"))
+    fmt = compare.add_mutually_exclusive_group()
+    fmt.add_argument("--json", action="store_true")
+    fmt.add_argument("--markdown", action="store_true", help="format the report for a GitHub step summary")
     args = parser.parse_args(argv)
+    if args.cmd == "compare" and args.markdown and argv is None and hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
     if args.cmd == "check" and args.adapter == []:
         parser.error("--adapter needs a command or Python script")
     try:
+        if args.cmd in {"baseline", "compare"}:
+            return _baseline_cmd(args)
         if args.cmd == "replay":
             return _replay_pi(args.json)
         if args.cmd == "fixtures":
@@ -127,9 +201,7 @@ def main(argv=None) -> int:
                     raise ValueError(f"Unknown fixture: {', '.join(sorted(unknown))}")
                 cases = [c for c in cases if c.id in args.case_ids]
             if args.tool == "pi":
-                adapter = ["node", str(Path(__file__).with_name("pi_adapter.mjs"))]
-                env = dict(os.environ, DIDITSEARCH_PI_ROOT=str(Path.cwd()))
-                env.pop("DIDITSEARCH_PI_MODULE", None)
+                adapter, env = _pi_adapter()
             elif adapter:
                 first = Path(adapter[0])
                 if first.suffix.lower() == ".py":
@@ -151,5 +223,12 @@ def main(argv=None) -> int:
             print(f"{report['passed']}/{report['total']} passed | {report['errors']} adapter errors")
         return 2 if report["errors"] else int(report["passed"] != report["total"])
     except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        if args.cmd == "compare":
+            from .summary import format_summary
+            error = dict(version=1, exit_code=2, status="infrastructure_error", cases=[], error=str(exc))
+            if args.json:
+                print(json.dumps(error))
+            elif args.markdown:
+                print(format_summary(error, markdown=True))
         print(f"did-it-search: {exc}", file=sys.stderr)
         return 2

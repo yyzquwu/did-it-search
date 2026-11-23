@@ -1,10 +1,28 @@
-import { readFileSync } from 'node:fs';
-import { registerHooks } from 'node:module';
-import { isAbsolute, join } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { readFileSync, realpathSync, statSync } from 'node:fs';
+import { findPackageJSON, registerHooks } from 'node:module';
+import { dirname, isAbsolute, join, relative, sep } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const PACKAGE = '@earendil-works/pi-coding-agent';
 const MAX_STDOUT = 64 * 1024;
+const VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(0|[1-9]\d*|\d*[a-zA-Z-][\da-zA-Z-]*)(?:\.(0|[1-9]\d*|\d*[a-zA-Z-][\da-zA-Z-]*))*)?(?:\+[\da-zA-Z-]+(?:\.[\da-zA-Z-]+)*)?$/;
+
+function callerURL(root, hint = '') {
+  if (!root || !isAbsolute(root)) {
+    throw new Error(`Set DIDITSEARCH_PI_ROOT to the absolute caller project directory${hint}`);
+  }
+  return pathToFileURL(join(root, 'package.json')).href;
+}
+
+// The published SDK exposes an import-only entry, so anchor Node's ESM resolution at the caller.
+function callerHook(parentURL) {
+  return registerHooks({
+    resolve(specifier, context, next) {
+      return next(specifier, specifier === PACKAGE && context.parentURL === import.meta.url
+        ? { ...context, parentURL } : context);
+    },
+  });
+}
 
 async function loadPi() {
   const { DIDITSEARCH_PI_MODULE: entry, DIDITSEARCH_PI_ROOT: root } = process.env;
@@ -12,18 +30,7 @@ async function loadPi() {
     if (!isAbsolute(entry)) throw new Error('DIDITSEARCH_PI_MODULE must be an absolute JS module path');
     return import(pathToFileURL(entry).href);
   }
-  if (!root || !isAbsolute(root)) {
-    throw new Error('Set DIDITSEARCH_PI_ROOT to the absolute caller project directory or set DIDITSEARCH_PI_MODULE');
-  }
-
-  // The published SDK exposes an import-only entry, so anchor Node's ESM resolution at the caller.
-  const parentURL = pathToFileURL(join(root, 'package.json')).href;
-  const hook = registerHooks({
-    resolve(specifier, context, next) {
-      return next(specifier, specifier === PACKAGE && context.parentURL === import.meta.url
-        ? { ...context, parentURL } : context);
-    },
-  });
+  const hook = callerHook(callerURL(root, ' or set DIDITSEARCH_PI_MODULE'));
   try {
     return await import(PACKAGE);
   } catch (error) {
@@ -31,6 +38,36 @@ async function loadPi() {
   } finally {
     hook.deregister();
   }
+}
+
+function identifyPi() {
+  const root = process.env.DIDITSEARCH_PI_ROOT;
+  const parentURL = callerURL(root);
+  if (!statSync(root).isDirectory()) throw new Error('DIDITSEARCH_PI_ROOT must be a caller project directory');
+  const hook = callerHook(parentURL);
+  let entryURL;
+  try {
+    entryURL = import.meta.resolve(PACKAGE);
+  } finally {
+    hook.deregister();
+  }
+
+  // Use the bare specifier to locate the package root even if the entry has a nested manifest.
+  const manifest = findPackageJSON(PACKAGE, parentURL);
+  if (!manifest) throw new Error(`Missing package.json for ${PACKAGE}`);
+  const packageDir = realpathSync(dirname(manifest));
+  const entry = realpathSync(fileURLToPath(entryURL));
+  const entryPath = relative(packageDir, entry);
+  if (isAbsolute(entryPath) || entryPath.split(sep).some((part) => part === '..' || part.toLowerCase() === 'node_modules')
+      || relative(packageDir, dirname(realpathSync(manifest))) || !statSync(entry).isFile()) {
+    throw new Error(`Package manifest and resolved entry do not identify the same ${PACKAGE} installation`);
+  }
+
+  const { name, version } = JSON.parse(readFileSync(manifest, 'utf8')) ?? {};
+  if (name !== PACKAGE || typeof version !== 'string' || !VERSION.test(version)) {
+    throw new Error(`Expected the ${PACKAGE} package name and a valid version in package.json`);
+  }
+  return { name, version };
 }
 
 function grepArgs(request, tool) {
@@ -82,16 +119,21 @@ async function search(request) {
   return normalize(raw);
 }
 
+const identify = process.argv[2] === '--identify';
 try {
-  const result = await search(JSON.parse(readFileSync(0, 'utf8')));
-  let output = JSON.stringify(result) + '\n';
-  if (Buffer.byteLength(output) > MAX_STDOUT) {
-    const { status, detail } = result;
-    output = JSON.stringify({ status, detail }) + '\n';
+  if (identify) {
+    process.stdout.write(JSON.stringify(identifyPi()) + '\n');
+  } else {
+    const result = await search(JSON.parse(readFileSync(0, 'utf8')));
+    let output = JSON.stringify(result) + '\n';
+    if (Buffer.byteLength(output) > MAX_STDOUT) {
+      const { status, detail } = result;
+      output = JSON.stringify({ status, detail }) + '\n';
+    }
+    if (Buffer.byteLength(output) > MAX_STDOUT) throw new Error('Pi grep text exceeds the 64 KiB runner limit');
+    process.stdout.write(output);
   }
-  if (Buffer.byteLength(output) > MAX_STDOUT) throw new Error('Pi grep text exceeds the 64 KiB runner limit');
-  process.stdout.write(output);
 } catch (error) {
-  process.stderr.write(`Pi adapter: ${error?.message ?? error}\n`);
+  process.stderr.write(`Pi adapter: ${identify ? 'SDK provenance: ' : ''}${error?.message ?? error}\n`);
   process.exitCode = 2;
 }
