@@ -1,0 +1,126 @@
+{
+  "version": 1,
+  "tool": {
+    "name": "@earendil-works/pi-coding-agent",
+    "version": "1.5.1"
+  },
+  "fixture_fingerprint": "9a3e6ca089a397bbdf3cd64633733cba609d3ac7986fd2701ea0d8d29c25c7b5",
+  "cases": [
+    {
+      "id": "binary",
+      "actual": "no_match",
+      "detail": "No matches found",
+      "passed": false,
+      "raw": {
+        "content": [
+          {
+            "text": "No matches found",
+            "type": "text"
+          }
+        ]
+      },
+      "skipped": []
+    },
+    {
+      "id": "empty-glob",
+      "actual": "no_match",
+      "detail": "No matches found",
+      "passed": false,
+      "raw": {
+        "content": [
+          {
+            "text": "No matches found",
+            "type": "text"
+          }
+        ]
+      },
+      "skipped": []
+    },
+    {
+      "id": "glob-root-decoy",
+      "actual": "no_match",
+      "detail": "No matches found",
+      "passed": true,
+      "raw": {
+        "content": [
+          {
+            "text": "No matches found",
+            "type": "text"
+          }
+        ]
+      },
+      "skipped": []
+    },
+    {
+      "id": "glob-root-hit",
+      "actual": "matched",
+      "detail": "migrations/main/a.js:1: console.log(\"hello\");",
+      "passed": true,
+      "raw": {
+        "content": [
+          {
+            "text": "migrations/main/a.js:1: console.log(\"hello\");",
+            "type": "text"
+          }
+        ]
+      },
+      "skipped": []
+    },
+    {
+      "id": "hit",
+      "actual": "matched",
+      "detail": "app.py:1: dispatch_event()",
+      "passed": true,
+      "raw": {
+        "content": [
+          {
+            "text": "app.py:1: dispatch_event()",
+            "type": "text"
+          }
+        ]
+      },
+      "skipped": []
+    },
+    {
+      "id": "ignored-caller",
+      "actual": "no_match",
+      "detail": "No matches found",
+      "passed": false,
+      "raw": {
+        "content": [
+          {
+            "text": "No matches found",
+            "type": "text"
+          }
+        ]
+      },
+      "skipped": []
+    },
+    {
+      "id": "miss",
+      "actual": "no_match",
+      "detail": "No matches found",
+      "passed": true,
+      "raw": {
+        "content": [
+          {
+            "text": "No matches found",
+            "type": "text"
+          }
+        ]
+      },
+      "skipped": []
+    },
+    {
+      "id": "missing-path",
+      "actual": "missing_path",
+      "detail": "Path not found: <fixture>/absent",
+      "passed": true,
+      "raw": {
+        "message": "Path not found: <fixture>/absent",
+        "name": "Error"
+      },
+      "skipped": []
+    }
+  ]
+}
