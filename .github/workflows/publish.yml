@@ -98,3 +98,36 @@ jobs:
         uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
         with:
           packages-dir: dist/
+
+  smoke:
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify both distributions on PyPI
+        shell: bash
+        env:
+          WHEEL_SHA256: ${{ inputs.wheel_sha256 }}
+          SDIST_SHA256: ${{ inputs.sdist_sha256 }}
+        run: |
+          curl --fail --silent --show-error --retry 8 --retry-all-errors --retry-delay 5 \
+            https://pypi.org/pypi/did-it-search/0.4.0/json > release.json
+          jq -e --arg wheel "${WHEEL_SHA256,,}" --arg sdist "${SDIST_SHA256,,}" '
+            [.urls[] | {key: .filename, value: .digests.sha256}] | from_entries ==
+            {"did_it_search-0.4.0-py3-none-any.whl": $wheel, "did_it_search-0.4.0.tar.gz": $sdist}
+          ' release.json
+      - name: Try the public install in a fresh project
+        shell: bash
+        run: |
+          command -v rg || (sudo apt-get update && sudo apt-get install -y ripgrep)
+          python3 -m venv "$RUNNER_TEMP/smoke"
+          "$RUNNER_TEMP/smoke/bin/pip" install uv==0.13.9
+          uvx="$RUNNER_TEMP/smoke/bin/uvx"
+          export UV_DEFAULT_INDEX=https://pypi.org/simple
+          mkdir sample && cd sample
+          echo 'load_settings()' > app.py
+          test "$("$uvx" --from did-it-search==0.4.0 did-it-search --version)" = 'did-it-search 0.4.0'
+          code=0
+          "$uvx" --from did-it-search==0.4.0 did-it-search explain load_settings . --glob '*.rs' --json > "$RUNNER_TEMP/miss.json" || code=$?
+          test "$code" -eq 1
+          jq -e '.status == "no_files" and .files_searched == 0' "$RUNNER_TEMP/miss.json"
+          "$uvx" --from did-it-search==0.4.0 did-it-search explain load_settings . --json | jq -e '.status == "matched"'

@@ -146,7 +146,7 @@ def main(argv=None) -> int:
         for stream in (sys.stdout, sys.stderr):
             if hasattr(stream, "reconfigure"):
                 stream.reconfigure(errors="backslashreplace")
-    parser = argparse.ArgumentParser(prog="did-it-search", description="Check how a search adapter reports its scope.")
+    parser = argparse.ArgumentParser(prog="did-it-search", description="Explain a local search or check a search tool for regressions.")
     parser.add_argument("--version", action="version", version=f"%(prog)s {version('did-it-search')}")
     sub = parser.add_subparsers(dest="cmd", required=True)
     sub.add_parser("demo", help="see a zero-match search with a real caller")
