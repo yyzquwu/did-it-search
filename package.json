@@ -1,5 +1,7 @@
 {
   "name": "did-it-search-pi-example",
   "private": true,
-  "dependencies": {"@earendil-works/pi-coding-agent": "1.5.1"}
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "1.5.0"
+  }
 }
