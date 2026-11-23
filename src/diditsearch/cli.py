@@ -222,7 +222,7 @@ def main(argv=None) -> int:
                     print(f"       {case['detail']}")
             print(f"{report['passed']}/{report['total']} passed | {report['errors']} adapter errors")
         return 2 if report["errors"] else int(report["passed"] != report["total"])
-    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+    except (OSError, ValueError, RecursionError, subprocess.SubprocessError) as exc:
         if args.cmd == "compare":
             from .summary import format_summary
             error = dict(version=1, exit_code=2, status="infrastructure_error", cases=[], error=str(exc))

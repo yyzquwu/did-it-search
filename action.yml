@@ -12,14 +12,17 @@ inputs:
 runs:
   using: composite
   steps:
-    - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
+    - id: runtime
+      uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
       with:
         python-version: '3.11'
+        update-environment: 'false'
     - name: Compare installed Pi search
       shell: bash
       working-directory: ${{ github.action_path }}
       env:
+        DIDITSEARCH_PYTHON: ${{ steps.runtime.outputs.python-path }}
         DIDITSEARCH_PROJECT_DIR: ${{ inputs.project-dir }}
         DIDITSEARCH_BASELINE: ${{ inputs.baseline }}
         DIDITSEARCH_PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-      run: python -I -X utf8 "$GITHUB_ACTION_PATH/.github/run-action.py"
+      run: '"$DIDITSEARCH_PYTHON" -I -X utf8 "$GITHUB_ACTION_PATH/.github/run-action.py"'

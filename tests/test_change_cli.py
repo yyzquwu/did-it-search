@@ -55,6 +55,11 @@ class ChangeCliTests(unittest.TestCase):
             with redirect_stdout(out), redirect_stderr(StringIO()):
                 self.assertEqual(main(["compare", "--baseline", str(path), "--json"]), 2)
             self.assertIn("Duplicate", json.loads(out.getvalue())["error"])
+            path.write_bytes(b"[" * 10000 + b"]" * 10000)
+            out = StringIO()
+            with redirect_stdout(out), redirect_stderr(StringIO()):
+                self.assertEqual(main(["compare", "--baseline", str(path), "--json"]), 2)
+            self.assertEqual(json.loads(out.getvalue())["status"], "infrastructure_error")
 
     def test_summary_lists_changes_and_escapes_tool_output(self):
         outcome = {"actual": "no_match", "skipped": [], "detail": "empty",

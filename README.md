@@ -1,6 +1,6 @@
 # Did It Search?
 
-A pull request check for repository search. Pi 1.5.0 and 1.5.1 both fail the absolute conformance suite. Downgrading from 1.5.1 to 1.5.0 loses one previously working search: the caller in `migrations/main/a.js`. Did It Search? reports the newly lost match and keeps the three previously accepted differences quiet. [Example pull request](https://github.com/yyzquwu/did-it-search/pulls?q=is%3Apr+head%3Ademo%2Fpi-downgrade)
+A pull request check for repository search. Pi 1.5.0 and 1.5.1 both fail the absolute conformance suite. Downgrading from 1.5.1 to 1.5.0 loses one previously working search: the caller in `migrations/main/a.js`. Did It Search? reports the newly lost match and keeps the three previously accepted differences quiet. [Example pull request](https://github.com/yyzquwu/did-it-search/pull/1)
 
 ## Add a search check to your project
 
@@ -12,7 +12,9 @@ did-it-search baseline --tool pi
 did-it-search compare --tool pi
 ```
 
-Review and commit `.did-it-search.json`. The baseline records the installed package version, a fingerprint of the eight fixtures, and the outcomes you accept. Temporary fixture roots in the saved evidence are displayed as `<fixture>`. Use `baseline --replace` only when you intend to change those expectations. In a pull-request workflow with `contents: read`, set up Node and ripgrep and include these steps:
+**First adoption takes two PRs.** In the first, review and merge `.did-it-search.json` into the target branch. It records the installed package version, a fingerprint of the eight fixtures, and the outcomes you accept. In the next PR, add the workflow step. If the base branch has no baseline yet, the check exits 2 even when the PR itself adds one.
+
+In a pull-request workflow with `contents: read`, set up Node and ripgrep and include these steps:
 
 ```yaml
 - uses: actions/checkout@v7
@@ -25,7 +27,12 @@ Review and commit `.did-it-search.json`. The baseline records the installed pack
 
 On a PR the Action compares the candidate's installed SDK with the baseline from the PR's base commit. A contributor can inspect the package versions, request, expected result and native tool response in the job summary. New regressions and changed failures exit 1. Improvements and known failures pass. An incompatible baseline or a tool that couldn't run exits 2. Use `compare --json` to consume the comparison outside GitHub. The existing `check` command still grades absolute conformance.
 
+**Updating the baseline.** To accept a deliberate change, run `baseline --replace` with the proposed SDK installed and review the JSON diff. Merge just the approved baseline first, then run the dependency PR against it. Replacing the baseline in the dependency PR itself leaves that check comparing against the old expectations. If you use a required check, the two-PR sequence lets reviewers approve the new expectation without disabling it.
+
+Baseline and comparison evidence displays temporary fixture roots as `<fixture>`. When the package lives in a subdirectory, set both `project-dir: web` and `baseline: web/.did-it-search.json` (substitute your directory). Use checkout at the workspace root. Events other than `pull_request`, including `merge_group`, use the checked-out baseline.
+
 ## Replay the Pi fix
+
 
 Install Git, ripgrep (`rg`), and Node.js 22.19+ (tested with Node 24). With `uvx` available, run:
 

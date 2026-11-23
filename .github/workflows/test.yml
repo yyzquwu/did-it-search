@@ -33,15 +33,18 @@ jobs:
         if: matrix.python == '3.12'
         run: did-it-search replay pi
       - name: Record a consumer baseline
-        if: github.event_name == 'push' && matrix.os == 'ubuntu-latest' && matrix.python == '3.12'
+        if: github.event_name == 'push' && matrix.python == '3.12'
         run: |
           mkdir consumer-project
           cd consumer-project
           npm install --ignore-scripts --no-audit --no-fund @earendil-works/pi-coding-agent@1.5.1
           did-it-search baseline
       - name: Run the composite action as a consumer
-        if: github.event_name == 'push' && matrix.os == 'ubuntu-latest' && matrix.python == '3.12'
+        if: github.event_name == 'push' && matrix.python == '3.12'
         uses: ./
         with:
           project-dir: consumer-project
           baseline: consumer-project/.did-it-search.json
+      - name: Verify the consumer Python after the Action
+        if: github.event_name == 'push' && matrix.python == '3.12'
+        run: python -c "import sys; assert sys.version_info[:2] == (3, 12), sys.version"

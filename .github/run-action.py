@@ -36,6 +36,9 @@ def baseline_path(root, path, tmp):
         raise ValueError(f"Pull request base commit {sha} is unavailable. Set checkout fetch-depth to 0.")
     result = subprocess.run([*git, "blob", f"{sha}:{path.as_posix()}"], capture_output=True)
     if result.returncode:
+        if subprocess.run([*git, "-e", f"{sha}:{path.as_posix()}"], capture_output=True).returncode:
+            raise ValueError(f"Baseline {path} is missing from the PR base commit {sha}. "
+                             "Merge the reviewed baseline into the base branch before enabling this check.")
         raise ValueError(f"Could not read baseline {path} from pull request base commit {sha}.")
     baseline = tmp / "baseline.json"
     baseline.write_bytes(result.stdout)

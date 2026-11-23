@@ -107,7 +107,7 @@ class ActionTests(unittest.TestCase):
         base = self.commit("README.md")
         (self.checkout / ".did-it-search.json").write_text("{}", encoding="utf-8")
         for sha, message in (("HEAD", "full Git commit ID"), ("0" * 40, "fetch-depth"),
-                             (base, "Could not read baseline .did-it-search.json")):
+                             (base, "Merge the reviewed baseline into the base branch")):
             with self.subTest(sha=sha):
                 code, summary = self.run_action("pull_request", sha=sha)
                 self.assertEqual(code, 2, summary)
