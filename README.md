@@ -31,6 +31,10 @@ The first command exits 1 because the glob selects zero files. The second finds 
 
 Directory globs are relative to the directory you pass. The command checks ignore rules even for an explicitly named file or a positive glob. It can count excluded paths by name and leaves their contents unread. Counts include eligible empty files. Binary files are identified by NUL bytes after ripgrep decodes the input. A confirmed text match can coexist with exclusions.
 
+Ripgrep normally skips hidden entries during a directory search. To inspect a hidden directory such as `.github/workflows`, name it directly. Printed follow-ups use PowerShell on Windows and shell quoting on Unix. Use the JSON argument list for programmatic execution.
+
+Large generated trees can exhaust the 4 MiB ripgrep output budget while the command counts excluded filenames. A confirmed match is still reported if exclusion counting stops early. For an output or process limit, narrow the path to the source directory you want to check. `--timeout` changes the time budget only.
+
 ## Catch search regressions in CI
 
 The GitHub Action checks the Pi SDK installed in your project against a reviewed baseline. In the example PR, downgrading Pi from 1.5.1 to 1.5.0 lost the match in `migrations/main/a.js`. The Action reported that regression and kept three previously accepted differences quiet. [Example pull request](https://github.com/yyzquwu/did-it-search/pull/1)

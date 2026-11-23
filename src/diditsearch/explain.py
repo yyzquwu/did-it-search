@@ -2,7 +2,6 @@
 
 import math
 import os
-import shutil
 import stat
 import subprocess
 import time
@@ -23,12 +22,21 @@ class _Incomplete(Exception):
     pass
 
 
+def _rg_path():
+    name = "rg.exe" if os.name == "nt" else "rg"
+    for directory in map(Path, os.get_exec_path()):
+        path = directory / name
+        if directory.is_absolute() and path.is_file() and os.access(path, os.X_OK):
+            return str(path)
+    return None
+
+
 class _Ripgrep:
     def __init__(self, deadline):
         self.deadline = deadline
         self.left = _OUTPUT_LIMIT
         self.runs = _PROCESS_LIMIT
-        executable = shutil.which("rg.exe" if os.name == "nt" else "rg")
+        executable = _rg_path()
         if not executable:
             raise ValueError("ripgrep (rg) must be available on PATH.")
         self.command = (os.path.abspath(executable), "--no-config", "--no-follow", "--threads=1")
@@ -161,7 +169,7 @@ def _outer_allowed(rg, outer, target, eligible):
             while parent not in parents and parent.is_relative_to(target):
                 parents.add(parent)
                 parent = parent.parent
-        size = _arg_size(opts)
+        size = _arg_size((*rg.command, *_LIST, "--hidden", "--no-ignore-vcs", *opts, *_METADATA, "--", "."))
         for parent in parents:
             with os.scandir(parent) as entries:
                 for entry in entries:
@@ -172,7 +180,11 @@ def _outer_allowed(rg, outer, target, eligible):
                     rule = "!/" + "/".join(map(_literal_glob, path.relative_to(outer).parts))
                     size += _arg_size(("--glob", rule)) + 2
                     if size > _ARG_LIMIT:
-                        raise _Incomplete("Search scope exceeded the command-line size limit.")
+                        # One reachable file can have thousands of ignored siblings.
+                        # Probe eligible paths directly using the same shared limits.
+                        return {file for file in sorted(eligible)
+                                if file in _files(rg, outer, "--hidden", "--no-ignore-vcs",
+                                                  *_prune(file.relative_to(outer).parts))}
                     opts.extend(("--glob", rule))
     return eligible & _files(rg, outer, "--hidden", "--no-ignore-vcs", *opts)
 

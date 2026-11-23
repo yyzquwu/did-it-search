@@ -10,6 +10,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from diditsearch.cli import main
+from diditsearch.explain import _rg_path
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -56,7 +57,8 @@ class ExplainCliTests(unittest.TestCase):
         report = json.loads(run.stdout)
         self.assertEqual((report["status"], report["files_searched"]), ("no_files", 0))
         follow_up = report["follow_up_argv"]
-        self.assertEqual(follow_up, ["rg", "--no-config", "-n", "-F", "--", *args[:2]])
+        self.assertEqual(follow_up, [_rg_path() if os.name == "nt" else "rg",
+                                     "--no-config", "-n", "-F", "--", *args[:2]])
         rerun = subprocess.run(follow_up, cwd=ROOT, capture_output=True, timeout=20)
         self.assertEqual((rerun.returncode, rerun.stderr), (0, b""))
         self.assertIn(b"pi_adapter.mjs", rerun.stdout)

@@ -2,11 +2,12 @@ import json
 import os
 import shutil
 import unittest
+from contextlib import chdir
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
-from diditsearch.explain import explain
+from diditsearch.explain import _rg_path, explain
 
 
 @unittest.skipUnless(shutil.which("rg"), "ripgrep is unavailable")
@@ -39,6 +40,16 @@ class ExplainTests(unittest.TestCase):
         self.check("no_match", 4, "-Needle[.]")
         self.check("matched", 1, "different", "-")
         self.check("no_match", 1, path="empty.txt")
+
+    @unittest.skipUnless(os.name == "nt", "Windows executable lookup")
+    def test_executable_resolution_uses_absolute_path_entries(self):
+        installed = _rg_path()
+        self.assertIsNotNone(installed)
+        self.put("rg.exe", b"")
+        with chdir(self.root), patch.dict(os.environ, {"PATH": os.pathsep.join((".", str(Path(installed).parent)))}):
+            self.assertEqual(_rg_path(), installed)
+            with patch.dict(os.environ, {"PATH": "."}):
+                self.assertIsNone(_rg_path())
 
     def test_missing_empty_and_glob_scope(self):
         self.put("other/migrations/a.js", b"needle")
@@ -139,12 +150,25 @@ class ExplainTests(unittest.TestCase):
         self.assertIn("ignored", self.check("partial", 0, path="inner"))
         self.put(".ignore", b"/unrelated/\n")
         self.put("inner/.gitignore", b"generated/\n")
-        self.put("inner/generated/.ignore", b"[\n")
+        self.put("inner/generated/.ignore", b"[z-a]\n")
         self.put("inner/generated/nested/file", b"ignored\n")
         self.check("matched", 1, path="inner")
         for i in range(70):
             self.put(f"inner/pkgs/pkg{i}/main.py", b"other\n")
         self.check("matched", 71, path="inner", timeout=30)
+
+    def test_many_ignored_siblings_do_not_hide_one_eligible_file(self):
+        (self.root / "inner/.git").mkdir(parents=True)
+        self.put(".ignore", b"/unrelated/\n")
+        self.put("inner/.gitignore", b"cache-*/\n")
+        self.put("inner/main.txt", b"needle\n")
+        # A smaller argv budget triggers the same fallback with fewer directories.
+        for i in range(30):
+            (self.root / "inner" / f"cache-generated-exports-{i:03}").mkdir()
+        with patch("diditsearch.explain._ARG_LIMIT", 1024):
+            self.check("matched", 1, path="inner")
+            self.put(".ignore", b"/inner/\n")
+            self.check("partial", 0, path="inner")
 
     def test_linked_paths_and_descendants(self):
         self.put("outside/file.txt", b"needle")

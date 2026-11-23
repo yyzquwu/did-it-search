@@ -8,7 +8,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from .explain import explain
+from .explain import _rg_path, explain
 
 
 _EXIT = {"matched": 0, "no_match": 1, "no_files": 1, "missing_path": 2, "partial": 2, "error": 2}
@@ -46,6 +46,10 @@ def explain_cmd(args):
         multiline = ["--multiline"] if "\n" in args.pattern else []
         follow_up = ["rg", "--no-config", "-n", "-F", *multiline, "--", args.pattern, path]
     if args.json:
+        if follow_up and os.name == "nt":
+            # A bare executable in Windows argv may resolve against the consumer's cwd.
+            exe = _rg_path()
+            follow_up = [exe, *follow_up[1:]] if exe else None
         print(json.dumps({**report, "follow_up_argv": follow_up}, allow_nan=False))
         return code
 
