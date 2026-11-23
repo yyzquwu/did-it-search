@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import tarfile
 from concurrent.futures import ThreadPoolExecutor
+from http.client import HTTPException
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
 from urllib.request import urlopen
@@ -149,7 +150,7 @@ def replay() -> dict:
             checkout(AFTER)
             after.update(run_checks(selected, adapter, timeout=60, env=env))
         status = _verdict(before, after)
-    except (OSError, ValueError, KeyError, tarfile.TarError, subprocess.SubprocessError) as exc:
+    except (OSError, HTTPException, ValueError, KeyError, tarfile.TarError, subprocess.SubprocessError) as exc:
         status = "infrastructure_error"
         result["error"] = str(exc)
     return dict(result, status=status, passed=status == "reproduced")

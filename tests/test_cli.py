@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
@@ -93,6 +94,18 @@ class CliTests(unittest.TestCase):
         self.assertIn(b"absent-case", unknown.stderr)
         conflict = self.run_cli("check", "--tool", "pi", "--adapter", "some-command")
         self.assertEqual(conflict.returncode, 2)
+
+    @unittest.skipUnless(shutil.which("node"), "Node.js is required for Pi")
+    def test_local_pi_check_ignores_the_replay_module_override(self):
+        with TemporaryDirectory() as tmp:
+            module = Path(tmp) / "wrong.mjs"
+            module.write_text("throw new Error('wrong SDK loaded')", encoding="utf-8")
+            result = self.run_cli("check", "--tool", "pi", "--case", "hit", "--json", cwd=tmp,
+                                  env={**os.environ, "DIDITSEARCH_PI_MODULE": str(module)})
+            self.assertEqual(result.returncode, 2)
+            detail = json.loads(result.stdout)["cases"][0]["detail"]
+            self.assertIn("@earendil-works/pi-coding-agent", detail)
+            self.assertNotIn("wrong SDK loaded", detail)
 
     def test_replay_json_exit_contract(self):
         for status, code in [("reproduced", 0), ("unexpected_parity", 1), ("infrastructure_error", 2)]:

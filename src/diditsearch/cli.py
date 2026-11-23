@@ -129,6 +129,7 @@ def main(argv=None) -> int:
             if args.tool == "pi":
                 adapter = ["node", str(Path(__file__).with_name("pi_adapter.mjs"))]
                 env = dict(os.environ, DIDITSEARCH_PI_ROOT=str(Path.cwd()))
+                env.pop("DIDITSEARCH_PI_MODULE", None)
             elif adapter:
                 first = Path(adapter[0])
                 if first.suffix.lower() == ".py":

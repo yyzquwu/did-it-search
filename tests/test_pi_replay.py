@@ -1,14 +1,18 @@
 import hashlib
 import io
+import json
 import os
 import tarfile
 import unittest
 from base64 import b64encode
+from contextlib import redirect_stderr, redirect_stdout
+from http.client import IncompleteRead
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from diditsearch import pi_replay as pi
+from diditsearch.cli import main
 
 
 def _report(hit="matched", decoy="no_match", errors=0):
@@ -20,6 +24,19 @@ def _report(hit="matched", decoy="no_match", errors=0):
 
 
 class PiReplayTests(unittest.TestCase):
+    def test_truncated_download_is_a_json_infrastructure_error(self):
+        out, err = io.StringIO(), io.StringIO()
+        with (patch.object(pi.shutil, "which", return_value="tool"),
+              patch.object(pi, "_run", side_effect=["v24.19.0", "ripgrep 15"]),
+              patch.object(pi, "_sources"),
+              patch.object(pi, "_deps", side_effect=IncompleteRead(b"x" * 32, 2016)),
+              redirect_stdout(out), redirect_stderr(err)):
+            self.assertEqual(main(["replay", "pi", "--json"]), 2)
+        report = json.loads(out.getvalue())
+        self.assertEqual((report["status"], report["passed"]), ("infrastructure_error", False))
+        self.assertEqual((report["before"]["commit"], report["after"]["commit"]), (pi.BEFORE, pi.AFTER))
+        self.assertIn("IncompleteRead", report["error"])
+
     def test_requires_the_specific_old_mismatch_and_fixed_outcome(self):
         old, fixed = _report(hit="no_match"), _report()
         self.assertEqual(pi._verdict(old, fixed), "reproduced")
