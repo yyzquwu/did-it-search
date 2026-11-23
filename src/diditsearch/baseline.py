@@ -1,6 +1,7 @@
 """Record and compare versioned, JSON-ready search baselines."""
 
 import json
+import os
 import re
 import stat
 from hashlib import file_digest, sha256
@@ -8,6 +9,9 @@ from hashlib import file_digest, sha256
 from .runner import _STATUSES
 
 _OUTCOME = {"actual", "detail", "passed", "skipped"}
+_NUM = r"(?:0|[1-9][0-9]*)"
+_PRE = rf"(?:{_NUM}|[0-9]*[A-Za-z-][A-Za-z0-9-]*)"
+_PI_VERSION = re.compile(rf"{_NUM}\.{_NUM}\.{_NUM}(?:-{_PRE}(?:\.{_PRE})*)?(?:\+[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*)?")
 
 
 def _encode(value):
@@ -18,6 +22,8 @@ def _tool(tool):
     if (not isinstance(tool, dict) or tool.keys() != {"name", "version"}
             or not all(isinstance(value, str) and value.strip() for value in tool.values())):
         raise ValueError("Tool identity must contain a nonempty name and version")
+    if tool["name"] == "@earendil-works/pi-coding-agent" and not _PI_VERSION.fullmatch(tool["version"]):
+        raise ValueError("Invalid Pi SDK version")
     return {"name": tool["name"], "version": tool["version"]}
 
 
@@ -98,7 +104,10 @@ def _portable_evidence(value, roots):
     if isinstance(value, list):
         return [_portable_evidence(item, roots) for item in value]
     if isinstance(value, dict):
-        return {k: _portable_evidence(v, roots) for k, v in value.items()}
+        normalized = {_portable_evidence(k, roots): _portable_evidence(v, roots) for k, v in value.items()}
+        if len(normalized) != len(value):
+            raise ValueError("Fixture path normalization would merge distinct evidence keys")
+        return normalized
     return value
 
 
@@ -116,7 +125,7 @@ def _report(report, cases):
         paths = {s for root in (case.root.absolute(), case.root.resolve())
                  for s in (str(root), root.as_posix())}
         roots = re.compile("(?:" + "|".join(re.escape(s) for s in sorted(paths, key=len, reverse=True))
-                           + r")([/\\]|$)")
+                           + r")([/\\]?)", re.IGNORECASE if os.name == "nt" else 0)
         outcomes[id_] = _portable_evidence(outcome, roots)
     counts = {"passed": sum(row["passed"] for row in outcomes.values()), "total": len(outcomes),
               "errors": sum(row["actual"] is None for row in outcomes.values())}

@@ -7,7 +7,7 @@ from tempfile import TemporaryDirectory
 
 from diditsearch.cli import _save_baseline, main
 from diditsearch.summary import format_summary
-from diditsearch.baseline import record
+from diditsearch.baseline import compare, record
 from diditsearch.fixtures import Case
 
 
@@ -18,11 +18,18 @@ class ChangeCliTests(unittest.TestCase):
             case = Case("missing", root, {"path": "absent"}, "missing_path", "Absent file")
             message = f"Path not found: {root / 'absent'}"
             row = dict(id="missing", expected="missing_path", actual="missing_path", detail=message,
-                       reason=case.reason, passed=True, skipped=[], expected_skipped=[], raw={"message": message})
+                       reason=case.reason, passed=True, skipped=[], expected_skipped=[],
+                       raw={"message": message, str(root): [f"At {root}, search failed."]})
             report = dict(version=1, cases=[row], passed=1, total=1, errors=0)
             saved = record([case], report, {"name": "pi", "version": "1.5.1"})
             self.assertEqual(saved["cases"][0]["raw"]["message"], "Path not found: <fixture>/absent")
             self.assertEqual(saved["cases"][0]["detail"], saved["cases"][0]["raw"]["message"])
+            self.assertEqual(saved["cases"][0]["raw"]["<fixture>"], ["At <fixture>, search failed."])
+            self.assertNotIn(str(root), json.dumps(saved))
+            tool = {"name": "@earendil-works/pi-coding-agent", "version": "1.5.1-rc.0+test.2"}
+            saved = record([case], report, tool)
+            saved["tool"]["version"] = "unknown"
+            self.assertEqual(compare(saved, [case], report, tool)["exit_code"], 2)
 
     def test_baseline_creation_is_exclusive_and_replacement_is_explicit(self):
         with TemporaryDirectory() as tmp:
