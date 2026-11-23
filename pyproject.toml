@@ -1,17 +1,25 @@
 [build-system]
-requires = ["setuptools>=68"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "did-it-search"
-version = "0.1.0"
+version = "0.2.0"
 description = "Conformance fixtures for the answers repository search tools give coding agents."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = []
+license = "MIT"
+license-files = ["LICENSE"]
+
+[project.urls]
+Repository = "https://github.com/yyzquwu/did-it-search"
 
 [project.scripts]
 did-it-search = "diditsearch.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+diditsearch = ["*.mjs"]

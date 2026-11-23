@@ -19,6 +19,9 @@ jobs:
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: ${{ matrix.python }}
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: "24"
       - if: runner.os == 'Linux'
         run: command -v rg || (sudo apt-get update && sudo apt-get install -y ripgrep)
       - if: runner.os == 'Windows'
@@ -26,3 +29,6 @@ jobs:
       - run: python -m pip install .
       - run: python -I -m unittest discover -s tests
       - run: did-it-search check --json
+      - name: Replay Pi's two pinned commits
+        if: matrix.python == '3.12'
+        run: did-it-search replay pi

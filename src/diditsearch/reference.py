@@ -21,10 +21,10 @@ def _rg(root: Path, *args: str, data: bytes | None = None) -> subprocess.Complet
     return run
 
 
-def _files(root: Path, target: Path, *opts: str) -> set[Path]:
+def _files(root: Path, target: Path, *opts: str, base: Path = Path()) -> set[Path]:
     metadata_glob = "--iglob" if os.name == "nt" else "--glob"
-    run = _rg(root, "--files", "--null", "--hidden", *opts, metadata_glob, "!.git", "--", ".")
-    paths = (Path(os.fsdecode(name)) for name in run.stdout.split(b"\0") if name)
+    run = _rg(root / base, "--files", "--null", "--hidden", *opts, metadata_glob, "!.git", "--", ".")
+    paths = (base / os.fsdecode(name) for name in run.stdout.split(b"\0") if name)
     return {path for path in paths if path.is_relative_to(target)}
 
 
@@ -49,10 +49,12 @@ def _target_mode(root: Path, target: Path) -> int:
 def inspect_search(root: Path, request: dict) -> dict:
     """Search regular files under a root-relative path with one optional rg glob.
 
-    Globs select scope independently of repository ignore rules. Dotfiles are
-    eligible, `.git` entries and linked entries are outside scope, and explicit
-    linked paths are rejected. Ignore rules above the root, global Git rules,
-    and .git/info/exclude are disabled. rg must be on PATH.
+    Globs select scope independently of repository ignore rules. A directory
+    anchors its glob at that directory. For a named file, the glob is applied to
+    the file's fixture-root-relative path. Dotfiles are eligible, `.git` entries
+    and linked entries are outside scope, and explicit linked paths are rejected.
+    Ignore rules above the fixture root, global Git rules, and .git/info/exclude
+    are disabled. rg must be on PATH.
 
     A file containing NUL or exceeding 1 MiB is excluded. The literal is
     case-sensitive and searched as UTF-8 bytes, with multiline support. A
@@ -85,7 +87,11 @@ def inspect_search(root: Path, request: dict) -> dict:
         raise ValueError("Search path must be a regular file or directory")
 
     glob_opts = ("--glob", glob) if glob is not None else ()
-    candidates = _files(root, target, "--no-ignore", *glob_opts)
+    base = Path()
+    # A walk starting inside .git would bypass the metadata exclusion.
+    if glob is not None and stat.S_ISDIR(mode) and Path(".git") not in map(Path, target.parts):
+        base = target
+    candidates = _files(root, target, "--no-ignore", *glob_opts, base=base)
     if not candidates:
         return {"status": "no_files", "detail": "The requested scope selects no regular files."}
     # Positive rg globs can override ignores, so intersect two independent walks.

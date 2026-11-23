@@ -18,7 +18,7 @@ class Case:
 
 
 def make_fixtures(root: Path) -> list[Case]:
-    """Populate a new or empty directory with six independent Git repositories."""
+    """Populate a new or empty directory with eight independent Git repositories."""
     root.mkdir(exist_ok=True)
     if any(root.iterdir()):
         raise ValueError(f"Fixture root must be empty: {root}")
@@ -46,6 +46,13 @@ def make_fixtures(root: Path) -> list[Case]:
         ("binary", "binary_needle", ".", None, "partial",
          "The literal occurs only in a NUL-marked file that the text search skips.",
          {"record.bin": b"\x00binary_needle\x00", "app.py": b"start_server()\n"}),
+        ("glob-root-hit", "hello", "repo", "migrations/main/*.js", "matched",
+         "The glob relative to repo selects migrations/main/a.js, which contains hello.",
+         {"repo/migrations/main/a.js": b'console.log("hello");\n'}),
+        ("glob-root-decoy", "hello", "repo", "migrations/main/*.js", "no_match",
+         "The selected migrations/main/a.js has no hello. The glob leaves out nested/migrations/main/b.js.",
+         {"repo/migrations/main/a.js": b'console.log("goodbye");\n',
+          "repo/nested/migrations/main/b.js": b'console.log("hello");\n'}),
     ]
     cases = []
     for id_, pattern, path, glob, expected, reason, files in specs:
@@ -58,7 +65,7 @@ def make_fixtures(root: Path) -> list[Case]:
         )
         for name, data in files.items():
             file = case_root / name
-            file.parent.mkdir(exist_ok=True)
+            file.parent.mkdir(parents=True, exist_ok=True)
             with file.open("xb") as stream:
                 stream.write(data)
         skipped = {"ignored-caller": ("ignored",), "binary": ("binary",)}.get(id_, ())

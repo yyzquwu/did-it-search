@@ -65,10 +65,17 @@ def _fields(result, error):
     skipped = result.get("skipped", [])
     if not isinstance(skipped, list) or not all(isinstance(s, str) and s for s in skipped):
         raise error("expected skipped to be a list of nonempty reason strings")
-    return status, detail, sorted(set(skipped))
+    evidence = {}
+    if "raw" in result:
+        try:
+            json.dumps(result["raw"], allow_nan=False)
+        except (ValueError, TypeError, RecursionError) as exc:
+            raise error("raw must be a JSON value with finite numbers") from exc
+        evidence["raw"] = result["raw"]
+    return status, detail, sorted(set(skipped)), evidence
 
 
-def _adapter_result(case, argv, timeout):
+def _adapter_result(case, argv, timeout, env):
     request = {key: case.request[key] for key in ("pattern", "path", "glob") if key in case.request}
     try:
         data = json.dumps(request, ensure_ascii=False, allow_nan=False).encode("utf-8")
@@ -80,7 +87,7 @@ def _adapter_result(case, argv, timeout):
         with TemporaryFile() as stdin, TemporaryFile() as stdout, TemporaryFile() as stderr:
             stdin.write(data + b"\n")
             stdin.seek(0)
-            with subprocess.Popen(argv, cwd=case.root, stdin=stdin, stdout=stdout, stderr=stderr,
+            with subprocess.Popen(argv, cwd=case.root, env=env, stdin=stdin, stdout=stdout, stderr=stderr,
                                   start_new_session=os.name != "nt") as process:
                 try:
                     process.wait(timeout=timeout)
@@ -120,7 +127,7 @@ def _adapter_result(case, argv, timeout):
     return _fields(result, protocol_error)
 
 
-def run_checks(cases, adapter=None, timeout=10.0) -> dict:
+def run_checks(cases, adapter=None, timeout=10.0, *, env=None) -> dict:
     """Return case outcomes and separate execution errors from status mismatches.
 
     Set adapter to a list starting with an absolute executable path or a name
@@ -147,15 +154,15 @@ def run_checks(cases, adapter=None, timeout=10.0) -> dict:
 
     results = []
     for case in cases:
-        actual, detail, skipped = None, config_error, []
+        actual, detail, skipped, evidence = None, config_error, [], {}
         if detail is None:
             try:
                 if argv is None:
                     from .reference import inspect_search
 
-                    actual, detail, skipped = _fields(inspect_search(case.root, case.request), ValueError)
+                    actual, detail, skipped, evidence = _fields(inspect_search(case.root, case.request), ValueError)
                 else:
-                    actual, detail, skipped = _adapter_result(case, argv, timeout)
+                    actual, detail, skipped, evidence = _adapter_result(case, argv, timeout, env)
             except _AdapterError as exc:
                 detail = str(exc)
             except Exception as exc:
@@ -164,6 +171,7 @@ def run_checks(cases, adapter=None, timeout=10.0) -> dict:
         results.append(dict(id=case.id, expected=case.expected, actual=actual,
                             detail=detail[:_DIAGNOSTIC_LIMIT * 2] if actual is None else detail,
                             expected_skipped=list(case.skipped), skipped=skipped,
-                            passed=actual == case.expected and skipped == sorted(case.skipped), reason=case.reason))
+                            passed=actual == case.expected and skipped == sorted(case.skipped), reason=case.reason,
+                            **evidence))
     return dict(version=1, passed=sum(result["passed"] for result in results), total=len(results),
                 errors=sum(result["actual"] is None for result in results), cases=results)

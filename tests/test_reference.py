@@ -30,6 +30,7 @@ class ReferenceTests(unittest.TestCase):
                 result = inspect_search(case.root, case.request)
                 self.assertEqual(result["status"], case.expected)
                 self.assertTrue(result["detail"])
+                self.assertEqual(tuple(result.get("skipped", [])), case.skipped)
 
     def test_literal_and_root_relative_scope(self):
         name = "-caf\u00e9 data/r\u00e9sum\u00e9.txt"
@@ -38,8 +39,30 @@ class ReferenceTests(unittest.TestCase):
         self.put("other.txt", b"outside-only")
         self.assertEqual(self.inspect(pattern, name, "*.txt")["status"], "matched")
         self.assertEqual(self.inspect(pattern, name, "!*.txt")["status"], "no_files")
+        self.assertEqual(self.inspect(pattern, name, name)["status"], "matched")
+        self.assertEqual(self.inspect(pattern, name, f"/{Path(name).name}")["status"], "no_files")
         self.assertEqual(self.inspect("outside-only", "-caf\u00e9 data")["status"], "no_match")
         self.assertEqual(self.inspect(path=f"{name}/child")["status"], "missing_path")
+
+    def test_glob_anchors_to_each_directory_and_keeps_ancestor_ignores(self):
+        self.put(".gitignore", b"/repo/migrations/main/a.js\n")
+        self.put("repo/.gitignore", b"/nested/migrations/main/b.js\n")
+        self.put("migrations/main/outside.js", b"needle")
+        self.put("repo/migrations/main/a.js", b"needle")
+        self.put("repo/nested/migrations/main/b.js", b"needle")
+        self.put("repo/nested/migrations/main/c.js", b"different")
+        self.put("repo/nested/deeper/migrations/main/d.js", b"needle")
+
+        for path in ("repo", "repo/nested"):
+            for glob in ("migrations/main/*.js", "/migrations/main/*.js"):
+                with self.subTest(path=path, glob=glob):
+                    result = self.inspect(path=path, glob=glob)
+                    self.assertEqual(result["status"], "partial")
+                    self.assertEqual(result["skipped"], ["ignored"])
+                    self.assertIn("1 ignored", result["detail"])
+        result = self.inspect(path="repo", glob="**/migrations/main/*.js")
+        self.assertEqual(result["status"], "matched")
+        self.assertIn("2 ignored", result["detail"])
 
     def test_glob_does_not_override_ignored_directory_or_read_it(self):
         self.put(".gitignore", b"generated/\n")
@@ -82,9 +105,13 @@ class ReferenceTests(unittest.TestCase):
     def test_git_metadata_exclusion_and_dotfile_scope(self):
         self.put(".git/metadata.txt", b"needle")
         self.put("nested/.git/metadata.txt", b"needle")
+        self.put("nested/.git/deep/metadata.txt", b"needle")
         self.put(".hidden.txt", b"different")
         self.assertEqual(self.inspect(glob="*.txt")["status"], "no_match")
         self.assertEqual(self.inspect(glob="**/metadata.txt")["status"], "no_files")
+        for path in (".git", "nested", "nested/.git", "nested/.git/deep"):
+            with self.subTest(path=path):
+                self.assertEqual(self.inspect(path=path, glob="*.txt")["status"], "no_files")
         self.assertEqual(self.inspect("different")["status"], "matched")
 
     def test_linked_directory_is_skipped_and_cannot_be_explicit(self):

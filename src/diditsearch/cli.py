@@ -62,6 +62,25 @@ def _demo(cases) -> None:
     print(f"Fixture answer: {case.reason}")
 
 
+def _replay_pi(as_json: bool) -> int:
+    from .pi_replay import replay
+
+    report = replay()
+    if as_json:
+        print(json.dumps(report, indent=2, allow_nan=False))
+    else:
+        for label in ("before", "after"):
+            rev = report[label]
+            print(f"{label} {rev['commit'][:12]}")
+            for case in rev.get("cases", []):
+                mark = "ERROR" if case["actual"] is None else "PASS" if case["passed"] else "FAIL"
+                print(f"  {mark:5} {case['id']:16} {case['detail']}")
+        print(f"Pi grep replay: {report['status']}")
+    if report.get("error"):
+        print(f"did-it-search: {report['error']}", file=sys.stderr)
+    return 2 if report["status"] == "infrastructure_error" else int(not report["passed"])
+
+
 def main(argv=None) -> int:
     if argv is None:
         for stream in (sys.stdout, sys.stderr):
@@ -71,17 +90,27 @@ def main(argv=None) -> int:
     parser.add_argument("--version", action="version", version=f"%(prog)s {version('did-it-search')}")
     sub = parser.add_subparsers(dest="cmd", required=True)
     sub.add_parser("demo", help="see a zero-match search with a real caller")
-    fixtures = sub.add_parser("fixtures", help="write the six independent search repos and their answer key")
+    fixtures = sub.add_parser("fixtures", help="write the search repos and their answer key")
     fixtures.add_argument("directory", type=Path)
     check = sub.add_parser("check", help="grade the reference or your own search adapter")
     check.add_argument("--json", action="store_true", help="print a machine-readable report")
-    check.add_argument("--timeout", type=float, default=10, metavar="SECONDS", help="per external adapter invocation")
-    check.add_argument("--adapter", nargs=argparse.REMAINDER, metavar="ARGV",
+    check.add_argument("--timeout", type=float, metavar="SECONDS",
+                       help="per invocation (60 seconds for Pi, 10 for other adapters)")
+    check.add_argument("--case", action="append", dest="case_ids", metavar="ID",
+                       help="run a specific fixture (repeat to select several)")
+    mode = check.add_mutually_exclusive_group()
+    mode.add_argument("--tool", choices=["pi"], help="grade the actual installed search tool")
+    mode.add_argument("--adapter", nargs=argparse.REMAINDER, metavar="ARGV",
                        help="external command and arguments, or a Python script; put this option last")
+    replay = sub.add_parser("replay", help="reproduce a pinned upstream regression")
+    replay.add_argument("tool", choices=["pi"])
+    replay.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
     if args.cmd == "check" and args.adapter == []:
         parser.error("--adapter needs a command or Python script")
     try:
+        if args.cmd == "replay":
+            return _replay_pi(args.json)
         if args.cmd == "fixtures":
             _export(args.directory)
             return 0
@@ -91,13 +120,23 @@ def main(argv=None) -> int:
                 _demo(cases)
                 return 0
             adapter = args.adapter
-            if adapter:
+            env = None
+            if args.case_ids:
+                unknown = set(args.case_ids) - {c.id for c in cases}
+                if unknown:
+                    raise ValueError(f"Unknown fixture: {', '.join(sorted(unknown))}")
+                cases = [c for c in cases if c.id in args.case_ids]
+            if args.tool == "pi":
+                adapter = ["node", str(Path(__file__).with_name("pi_adapter.mjs"))]
+                env = dict(os.environ, DIDITSEARCH_PI_ROOT=str(Path.cwd()))
+            elif adapter:
                 first = Path(adapter[0])
                 if first.suffix.lower() == ".py":
                     adapter = [sys.executable, str(first.absolute()), *adapter[1:]]
                 elif first.parent != Path(".") or "/" in adapter[0] or "\\" in adapter[0]:
                     adapter = [str(first.absolute()), *adapter[1:]]
-            report = run_checks(cases, adapter=adapter, timeout=args.timeout)
+            timeout = args.timeout if args.timeout is not None else (60 if args.tool else 10)
+            report = run_checks(cases, adapter=adapter, timeout=timeout, env=env)
         if args.json:
             print(json.dumps(report, indent=2, allow_nan=False))
         else:

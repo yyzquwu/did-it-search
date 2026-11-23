@@ -1,0 +1,100 @@
+{
+  "version": 1,
+  "upstream": "https://github.com/earendil-works/pi/pull/11895",
+  "before": {
+    "commit": "1f7c685b851441745d1b1edb99cafeecb2ed3ff5",
+    "version": 1,
+    "passed": 1,
+    "total": 2,
+    "errors": 0,
+    "cases": [
+      {
+        "id": "glob-root-hit",
+        "expected": "matched",
+        "actual": "no_match",
+        "detail": "No matches found",
+        "expected_skipped": [],
+        "skipped": [],
+        "passed": false,
+        "reason": "The glob relative to repo selects migrations/main/a.js, which contains hello.",
+        "raw": {
+          "content": [
+            {
+              "type": "text",
+              "text": "No matches found"
+            }
+          ]
+        }
+      },
+      {
+        "id": "glob-root-decoy",
+        "expected": "no_match",
+        "actual": "no_match",
+        "detail": "No matches found",
+        "expected_skipped": [],
+        "skipped": [],
+        "passed": true,
+        "reason": "The selected migrations/main/a.js has no hello. The glob leaves out nested/migrations/main/b.js.",
+        "raw": {
+          "content": [
+            {
+              "type": "text",
+              "text": "No matches found"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "after": {
+    "commit": "6bf2ab9bbb64fd14793e506a5404078441219b95",
+    "version": 1,
+    "passed": 2,
+    "total": 2,
+    "errors": 0,
+    "cases": [
+      {
+        "id": "glob-root-hit",
+        "expected": "matched",
+        "actual": "matched",
+        "detail": "migrations/main/a.js:1: console.log(\"hello\");",
+        "expected_skipped": [],
+        "skipped": [],
+        "passed": true,
+        "reason": "The glob relative to repo selects migrations/main/a.js, which contains hello.",
+        "raw": {
+          "content": [
+            {
+              "type": "text",
+              "text": "migrations/main/a.js:1: console.log(\"hello\");"
+            }
+          ]
+        }
+      },
+      {
+        "id": "glob-root-decoy",
+        "expected": "no_match",
+        "actual": "no_match",
+        "detail": "No matches found",
+        "expected_skipped": [],
+        "skipped": [],
+        "passed": true,
+        "reason": "The selected migrations/main/a.js has no hello. The glob leaves out nested/migrations/main/b.js.",
+        "raw": {
+          "content": [
+            {
+              "type": "text",
+              "text": "No matches found"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "runtime": {
+    "node": "v24.19.0",
+    "ripgrep": "ripgrep 15.2.0 (rev e89fff89ac)"
+  },
+  "status": "reproduced",
+  "passed": true
+}

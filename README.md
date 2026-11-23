@@ -1,6 +1,37 @@
 # Did It Search?
 
-A conformance kit for the answers repository search tools give coding agents. When ripgrep is given an explicit search root such as `.`, a normal miss, a glob selecting zero files, and an ignored caller can all produce empty stdout. Give your search adapter six tiny Git repositories and check whether it tells these situations apart.
+A regression kit for repository search tools. In [Pi issue #11807](https://github.com/earendil-works/pi/issues/11807), a coding agent asked grep to look inside `repo` for `migrations/main/*.js`. The file was there. Pi started ripgrep one directory too high and returned `No matches found`.
+
+## Replay the Pi fix
+
+Install Git, ripgrep (`rg`), and Node.js 22.19+ (tested with Node 24). With `uvx` available, run:
+
+```sh
+uvx --from git+https://github.com/yyzquwu/did-it-search.git@v0.2.0 did-it-search replay pi
+```
+
+The replay runs Pi's grep implementation from both sides of [the merged fix](https://github.com/earendil-works/pi/pull/11895) on two fixtures. Both requests ask for the literal `hello` under `repo` with the glob `migrations/main/*.js`. One fixture has the match at `repo/migrations/main/a.js`. The other puts the only match under `repo/nested/migrations/main/b.js`, outside the requested glob. That second case catches a fix that simply widens the search. Add `--json` to inspect the results.
+
+### Observed result
+
+The pinned replay needs network access to GitHub and the npm registry. It checks the two commit IDs and the downloaded package hashes, loads the upstream code in a temporary directory, and runs without a model or API key. Exit 0 means the historical regression was reproduced, 1 means the behavior differed from the expected transition, and 2 means the replay could not be evaluated.
+
+| Pinned Pi revision | Target in `migrations/main` | Only the deeper decoy contains `hello` |
+| --- | --- | --- |
+| Before · `1f7c685` | `No matches found` | `No matches found` |
+| After · `6bf2ab9` | `migrations/main/a.js:1: console.log("hello");` | `No matches found` |
+
+The [recorded replay](study/pi-11895.json) contains the grades and native responses. Did It Search? v0.1 also missed the target. The reference adapter now evaluates directory globs relative to the requested search directory.
+
+### Grade your local Pi installation
+
+The local check loads `@earendil-works/pi-coding-agent` from the calling project's Node dependencies. On the target-file case, published versions 1.4.0 and 1.5.0 missed the match; 1.5.1 and 1.6.0 found it. Install the kit with `python -m pip install "git+https://github.com/yyzquwu/did-it-search.git@v0.2.0"`. From the project containing Pi, run:
+
+```sh
+did-it-search check --tool pi --case glob-root-hit --case glob-root-decoy --json
+```
+
+Remove the two `--case` options to grade all eight cases. The JSON report retains Pi's native response when it fits alongside the diagnostic in the adapter's 64 KiB output limit. A generic empty result can pass the decoy and still fail a case that requires a specific exclusion reason.
 
 ## See the ignored caller
 
@@ -19,7 +50,7 @@ did-it-search check --json --adapter examples/plain_rg.py
 did-it-search fixtures search-fixtures
 ```
 
-The reference passes all six cases. The example wraps ordinary ripgrep output and handles a missing path. It passes three cases and exits 1. Try `did-it-search check --adapter examples/reference_adapter.py` for a passing external adapter. The last command above writes six repositories and `cases.json` to a new directory so you can open a case in your own agent. Run the installed CLI as `python -m diditsearch` when preferred.
+The reference passes all eight cases. The example wraps ordinary ripgrep output and handles a missing path. It passes four cases and exits 1. Try `did-it-search check --adapter examples/reference_adapter.py` for a passing external adapter. The last command above writes eight repositories and `cases.json` to a new directory so you can open a case in your own agent. Run the installed CLI as `python -m diditsearch` when preferred.
 
 | Fixture | Search truth | Expected status | Exclusions |
 | --- | --- | --- | --- |
@@ -29,6 +60,8 @@ The reference passes all six cases. The example wraps ordinary ripgrep output an
 | empty-glob | The project contains Python and the request selects Rust files | `no_files` | none |
 | ignored-caller | The only call is in a generated file excluded by Git ignore rules | `partial` | `ignored` |
 | binary | The only occurrence is in a file containing NUL bytes | `partial` | `binary` |
+| glob-root-hit | The match lies inside the requested directory and matches its folder glob | `matched` | none |
+| glob-root-decoy | Only a lookalike folder outside the glob contains the literal | `no_match` | none |
 
 ## Check your search adapter in CI
 
