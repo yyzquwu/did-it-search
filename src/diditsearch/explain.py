@@ -222,6 +222,14 @@ def explain(pattern, path=".", glob=None, *, timeout=5.0):
             allowed = _files(rg, root, "--no-require-git", "--hidden",
                              *_prune(target.relative_to(root).parts))
             eligible = scope & allowed
+        # Repository boundaries reset Git rules. Ripgrep's .ignore and .rgignore
+        # can still exclude the entire repository from a parent directory.
+        if eligible and (root / ".git").exists():
+            outer = next((p for p in reversed(root.parents)
+                          if (p / ".ignore").is_file() or (p / ".rgignore").is_file()), None)
+            if outer is not None:
+                eligible &= _files(rg, outer, "--hidden", "--no-ignore-vcs",
+                                   *_prune(target.relative_to(outer).parts))
         multiline = ("--multiline",) if "\n" in pattern else ()
         literal = ("--fixed-strings", "--case-sensitive", *multiline, "-e", pattern)
         limit = _ARG_LIMIT - _arg_size((*rg.command, *_SCAN, "--files-with-matches", *literal, "--")) - 128

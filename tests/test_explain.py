@@ -120,6 +120,17 @@ class ExplainTests(unittest.TestCase):
         self.put(".ignore", b".github/\n")
         self.assertIn("ignored", self.check("partial", 0, path=".github/workflows"))
 
+    def test_parent_ripgrep_ignore_can_exclude_a_nested_repository(self):
+        self.put("inner/main.py", b"needle\n")
+        (self.root / "inner/.git").mkdir()
+        for name in (".ignore", ".rgignore"):
+            with self.subTest(name=name):
+                rule = self.put(name, b"/inner/\n")
+                self.check("partial", 0, path="inner/main.py")
+                self.check("partial", 0, path="inner")
+                rule.unlink()
+                self.check("matched", 1, path="inner/main.py")
+
     def test_linked_paths_and_descendants(self):
         self.put("outside/file.txt", b"needle")
         self.put("scope/file.txt", b"different")
