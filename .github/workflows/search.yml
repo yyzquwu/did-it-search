@@ -20,4 +20,4 @@ jobs:
           python-version: "3.12"
       - run: command -v rg || (sudo apt-get update && sudo apt-get install -y ripgrep)
       - run: npm ci --ignore-scripts --no-audit --no-fund
-      - uses: yyzquwu/did-it-search@0654145775c6c4edb3fd34e8e8109dbe754ed760 # v0.3 candidate
+      - uses: yyzquwu/did-it-search@c8631c0a4e6282bd6545df588747b4ab8f2a9498 # v0.3 candidate
