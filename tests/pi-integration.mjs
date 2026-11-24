@@ -240,7 +240,7 @@ async function verifyResults(pi, scratch, cwd, manifest) {
       }
       console.log(`${name}: PASS`);
       if (args.includes('--demo') && name !== 'truncated') {
-        console.log(`  grep ${JSON.stringify(input)}\n  Pi only: ${text(native)}\n  With extension: ${found}`);
+        console.log(`  grep ${JSON.stringify({ literal: true, ...input })}\n  Pi only: ${text(native)}\n  With extension: ${found}`);
       }
     }
   });
@@ -278,9 +278,9 @@ async function benchmark(pi, scratch, manifest) {
 
 async function withWindowsReadLock(path, run) {
   const lock = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
-    '$stream = [IO.File]::Open($env:DID_IT_SEARCH_AUDIT_FILE, "Open", "Read", "None"); ' +
-    '[Console]::WriteLine("locked"); [void][Console]::ReadLine(); $stream.Dispose()'], {
-    env: { ...process.env, DID_IT_SEARCH_AUDIT_FILE: path }, stdio: ['pipe', 'pipe', 'inherit'], windowsHide: true,
+    '$ErrorActionPreference = "Stop"; $stream = [IO.File]::Open($env:DID_IT_SEARCH_AUDIT_FILE, "Open", "Read", "None"); ' +
+    'try { [Console]::WriteLine("locked"); Start-Sleep -Seconds 180 } finally { $stream.Dispose() }'], {
+    env: { ...process.env, DID_IT_SEARCH_AUDIT_FILE: path }, stdio: ['ignore', 'pipe', 'inherit'], windowsHide: true,
   });
   const closed = once(lock, 'close');
   try {
@@ -291,7 +291,7 @@ async function withWindowsReadLock(path, run) {
     await assert.rejects(readFile(path), { code: 'EBUSY' });
     console.log('Windows: ignored file contents were locked against reads throughout verification');
   } finally {
-    lock.stdin.end();
+    lock.kill();
     await closed;
   }
 }

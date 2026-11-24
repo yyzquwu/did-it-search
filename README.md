@@ -11,12 +11,9 @@ pi install git:github.com/yyzquwu/did-it-search@v0.6.0
 pi --tools +grep
 ```
 
-The extension activates with Pi **1.5.1 and 1.6.0** and uses local ripgrep. In an open repository, try asking Pi: *“Use the grep tool with literal set to true to look for legacy_export.”* If the target directory was ignored, the result can look like this:
+The extension activates with Pi **1.5.1 and 1.6.0** and uses local ripgrep. In an open repository, try asking Pi: *“Use the grep tool with literal set to true to look for legacy_export.”*
 
-```text
-No matches found
-[Did It Search] Skipped "generated/ignored-caller.ts" by "generated/" at .gitignore:1. Ask before inspecting this path.
-```
+![Scripted Pi grep call with and without the extension. The extension adds that generated/ignored-caller.ts was skipped by generated/ at .gitignore line 1.](https://raw.githubusercontent.com/yyzquwu/did-it-search/v0.6.0/docs/pi-grep.gif)
 
 The original Pi result is kept. A note names an excluded path or explains that a glob selected zero files; confirming a match in a skipped file takes another search. The extension does not open skipped source files or execute a suggested follow-up. A hit starts zero diagnostic processes. A miss with no actionable evidence stays quiet, including a repository where only common dependency or cache folders were excluded.
 
@@ -34,6 +31,8 @@ node tests/pi-integration.mjs --pi-root ./node_modules/pi-test-host --demo
 ```
 
 The test scripts the model's tool call and runs Pi's actual grep and extension machinery with the extension off and on. No model key is needed. Replace `--demo` with `--bench` for timings on fixtures with 100 and 10,000 ignored dependency files. Use `--audit-reads` separately to verify ignored contents stay unread (Windows PowerShell or Linux with `strace`).
+
+On one Windows run with Pi 1.6.0, Node 22.19.0 and ripgrep 15.2.0, the median miss took 808 ms with the extension off and 1,090 ms with it on (100 ignored files). With 10,000 ignored files the medians were 640 ms and 1,318 ms. Each figure comes from 12 alternating measurements per variant after three warmups; timing includes native grep. Hit timings varied substantially on this host.
 
 ## Try the ignored-caller demo
 

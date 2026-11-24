@@ -3,5 +3,5 @@ recursive-include tests *.py
 recursive-include study *.py *.md *.json
 include action.yml .github/run-action.py
 include package.json
-recursive-include pi *.ts *.mjs *.js
+recursive-include pi *.ts *.mjs
 recursive-include tests *.mjs
