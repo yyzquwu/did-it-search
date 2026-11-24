@@ -30,7 +30,7 @@ npm install --prefix ./node_modules/pi-test-host --ignore-scripts --no-audit --n
 node tests/pi-integration.mjs --pi-root ./node_modules/pi-test-host --demo
 ```
 
-The test scripts the model's tool call and runs Pi's actual grep and extension machinery with the extension off and on. No model key is needed. Replace `--demo` with `--bench` for timings on fixtures with 100 and 10,000 ignored dependency files. Use `--audit-reads` separately to verify ignored contents stay unread (Windows PowerShell or Linux with `strace`).
+The test scripts the model's tool call and runs Pi's actual grep and extension machinery with the extension off and on. No model key is needed. Replace `--demo` with `--bench` for timings on fixtures with 100 and 10,000 ignored dependency files. Use `--audit-reads` separately to verify ignored contents stay unread (Windows file permissions or Linux with `strace`).
 
 On one Windows run with Pi 1.6.0, Node 22.19.0 and ripgrep 15.2.0, the median miss took 808 ms with the extension off and 1,090 ms with it on (100 ignored files). With 10,000 ignored files the medians were 640 ms and 1,318 ms. Each figure comes from 12 alternating measurements per variant after three warmups; timing includes native grep. Hit timings varied substantially on this host.
 

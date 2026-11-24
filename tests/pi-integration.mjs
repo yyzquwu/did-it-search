@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
-import { execFileSync, spawn, spawnSync } from 'node:child_process';
-import { once } from 'node:events';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
 import { findPackageJSON, registerHooks } from 'node:module';
 import { tmpdir } from 'node:os';
@@ -33,7 +32,7 @@ async function importPi() {
   const hook = registerHooks({
     resolve(specifier, context, next) {
       if (context.parentURL !== import.meta.url) return next(specifier, context);
-      if (specifier === piAi) return next(specifier, { ...context, parentURL: sdkUrl });
+      if (specifier === piAi || specifier === '@earendil-works/pi-agent-core') return next(specifier, { ...context, parentURL: sdkUrl });
       if (specifier !== piPackage) return next(specifier, context);
       const result = next(specifier, { ...context, parentURL: piCaller });
       sdkUrl = result.url;
@@ -43,13 +42,14 @@ async function importPi() {
   try {
     const sdk = await import(piPackage);
     const ai = await import(piAi);
+    const { Agent } = await import('@earendil-works/pi-agent-core');
     const manifestPath = findPackageJSON(piPackage, piCaller);
     assert.equal(await realpath(manifestPath), await realpath(resolve(piRoot, 'node_modules', piPackage, 'package.json')),
       'Pi must be installed directly in the supplied scratch directory');
     const manifest = await packageJSON(manifestPath);
     assert.equal(manifest.name, piPackage);
     assert(['1.6.0', '1.5.1'].includes(manifest.version), `Unexpected Pi version: ${manifest.version}`);
-    return { sdk, ai, version: manifest.version };
+    return { sdk, ai, Agent, version: manifest.version };
   } finally {
     hook.deregister();
   }
@@ -98,7 +98,7 @@ const scenarios = {
 };
 const text = ({ content }) => content.filter(({ type }) => type === 'text').map((block) => block.text).join('\n');
 
-async function createHarness({ sdk, ai }, scratch, cwd, enabled, manifest) {
+async function createHarness({ sdk, ai, Agent }, scratch, cwd, enabled, manifest, grepRoot) {
   const agentDir = join(scratch, 'agent');
   const settingsManager = sdk.SettingsManager.inMemory({ packages: enabled ? [extensionRoot] : [] });
   const loader = new sdk.DefaultResourceLoader({
@@ -122,10 +122,20 @@ async function createHarness({ sdk, ai }, scratch, cwd, enabled, manifest) {
     allowModelNetwork: false, refreshOnCreate: false,
   });
   modelRuntime.registerNativeProvider(faux.provider);
-  const { session } = await sdk.createAgentSession({
+  const options = {
     cwd, agentDir, modelRuntime, settingsManager, resourceLoader: loader,
     sessionManager: sdk.SessionManager.inMemory(), model: faux.getModel(), tools: ['grep'],
-  });
+  };
+  let session;
+  if (grepRoot) {
+    const agent = new Agent({
+      initialState: { systemPrompt: '', model: faux.getModel(), thinkingLevel: 'off', tools: [], messages: [] },
+      convertToLlm: sdk.convertToLlm, streamFn: (model, ctx, opts) => modelRuntime.streamSimple(model, ctx, opts),
+    });
+    session = new sdk.AgentSession({ ...options, agent, baseToolsOverride: { grep: sdk.createGrepTool(grepRoot) } });
+  } else {
+    ({ session } = await sdk.createAgentSession(options));
+  }
   const extensionErrors = [];
   await session.bindExtensions({ onError: (error) => extensionErrors.push(error) });
   assert.deepEqual(session.getActiveToolNames(), ['grep']);
@@ -197,9 +207,20 @@ async function verify(pi, scratch, manifest) {
   const cwd = await fixture(scratch, 'verification');
   const run = () => verifyResults(pi, scratch, cwd, manifest);
   if (process.platform === 'win32' && args.includes('--audit-reads')) {
-    await withWindowsReadLock(join(cwd, 'generated', ignoredFile), run);
+    await withWindowsReadDenied(join(cwd, 'generated', ignoredFile), run);
   } else {
     await run();
+  }
+  const other = join(scratch, 'other-project');
+  await mkdir(other);
+  await writeFile(join(other, 'report.md'), 'other-project-marker\n');
+  const embedded = await createHarness(pi, scratch, cwd, true, manifest, other);
+  try {
+    assert.match(text((await embedded.run({ pattern: 'other-project-marker', glob: '*.md' })).result), /report\.md:1/);
+    assert.equal(text((await embedded.run({ pattern: 'absent', glob: '*.md' })).result), 'No matches found');
+    console.log('SDK grep bound to another project: PASS');
+  } finally {
+    embedded.dispose();
   }
 }
 
@@ -276,23 +297,22 @@ async function benchmark(pi, scratch, manifest) {
   }
 }
 
-async function withWindowsReadLock(path, run) {
-  const lock = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
-    '$ErrorActionPreference = "Stop"; $stream = [IO.File]::Open($env:DID_IT_SEARCH_AUDIT_FILE, "Open", "Read", "None"); ' +
-    'try { [Console]::WriteLine("locked"); Start-Sleep -Seconds 180 } finally { $stream.Dispose() }'], {
-    env: { ...process.env, DID_IT_SEARCH_AUDIT_FILE: path }, stdio: ['ignore', 'pipe', 'inherit'], windowsHide: true,
-  });
-  const closed = once(lock, 'close');
+async function withWindowsReadDenied(path, run) {
+  const system = join(process.env.SystemRoot, 'System32');
+  const identity = execFileSync(join(system, 'whoami.exe'), ['/user', '/fo', 'csv', '/nh'], { encoding: 'utf8' });
+  const sid = identity.match(/\bS-1-[\d-]+\b/i)?.[0];
+  assert.ok(sid, 'Could not identify the Windows user for the scratch fixture');
+  const acl = (...args) => execFileSync(join(system, 'icacls.exe'), [path, ...args], { windowsHide: true });
+  // RD denies file data reads, while allowing metadata inspection and cleanup.
+  acl('/deny', `*${sid}:(RD)`);
+  const check = () => assert.rejects(readFile(path), e => ['EACCES', 'EPERM'].includes(e.code));
   try {
-    const [ready] = await Promise.race([once(lock.stdout, 'data', { signal: AbortSignal.timeout(15_000) }), closed]);
-    assert.equal(ready.toString().trim(), 'locked', 'Could not lock the ignored fixture');
-    await assert.rejects(readFile(path), { code: 'EBUSY' });
+    await check();
     await run();
-    await assert.rejects(readFile(path), { code: 'EBUSY' });
-    console.log('Windows: ignored file contents were locked against reads throughout verification');
+    await check();
+    console.log('Windows: read access to the ignored fixture was denied throughout verification');
   } finally {
-    lock.kill();
-    await closed;
+    acl('/remove:d', `*${sid}`);
   }
 }
 
@@ -315,7 +335,7 @@ await withScratch(async (scratch) => {
   if (args.includes('--audit-reads')) {
     assert(!args.includes('--bench'), 'Run the file audit and benchmark separately');
     if (process.platform === 'linux') return traceReads(scratch);
-    assert.equal(process.platform, 'win32', '--audit-reads requires Linux strace or Windows PowerShell');
+    assert.equal(process.platform, 'win32', '--audit-reads requires Linux strace or Windows file permissions');
   }
   Object.assign(process.env, {
     PI_OFFLINE: '1', PI_CODING_AGENT_DIR: join(scratch, 'agent'),
