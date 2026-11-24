@@ -15,7 +15,9 @@ The extension activates with Pi **1.5.1 and 1.6.0** and uses local ripgrep. In a
 
 ![Scripted Pi grep call with and without the extension. The extension adds that generated/ignored-caller.ts was skipped by generated/ at .gitignore line 1.](https://raw.githubusercontent.com/yyzquwu/did-it-search/v0.6.0/docs/pi-grep.gif)
 
-The original Pi result is kept. A note names an excluded path or explains that a glob selected zero files; confirming a match in a skipped file takes another search. The extension does not open skipped source files or execute a suggested follow-up. A hit starts zero diagnostic processes. A miss with no actionable evidence stays quiet, including a repository where only common dependency or cache folders were excluded.
+Pi keeps its original result. An extra note can name a skipped path and the ignore rule that excluded it. Confirming a match in that file takes a separate search that you control. The extension can also flag a glob that selected zero files when it can distinguish that case from an ignored directory. A hit starts zero diagnostic processes.
+
+For a plain miss, the extension skips examples such as `.env.local`, `node_modules/`, `.mypy_cache/`, and `target/` when choosing a path to show. A skipped filename is evidence about search scope. Its contents stay unread.
 
 Diagnostics cover the stock local grep tool, a case-sensitive literal, default context and result limit, and a supported project-relative directory. Pi includes hidden files by default. The extension follows that scope and suppresses its note when it cannot verify a result within its time or output budget. Custom grep tools, shell commands and regex searches pass through. Installing the extension adds no Python dependency.
 
@@ -32,7 +34,7 @@ node tests/pi-integration.mjs --pi-root ./node_modules/pi-test-host --demo
 
 The test scripts the model's tool call and runs Pi's actual grep and extension machinery with the extension off and on. No model key is needed. Replace `--demo` with `--bench` for timings on fixtures with 100 and 10,000 ignored dependency files. Use `--audit-reads` separately to verify ignored contents stay unread (Windows file permissions or Linux with `strace`).
 
-On one Windows run with Pi 1.6.0, Node 22.19.0 and ripgrep 15.2.0, the median miss took 808 ms with the extension off and 1,090 ms with it on (100 ignored files). With 10,000 ignored files the medians were 640 ms and 1,318 ms. Each figure comes from 12 alternating measurements per variant after three warmups; timing includes native grep. Hit timings varied substantially on this host.
+On one Windows run of the [v0.6 prototype](https://github.com/yyzquwu/did-it-search/commit/c715666aca25d6910418ea1d6814e0d893318b29) with Pi 1.6.0, Node 22.19.0 and ripgrep 15.2.0, the median miss took 808 ms with the extension off and 1,090 ms with it on (100 ignored files). With 10,000 ignored files the medians were 640 ms and 1,318 ms. Each figure comes from 12 alternating measurements per variant after three warmups and includes native grep. Hit timings varied substantially on this host.
 
 ## Try the ignored-caller demo
 

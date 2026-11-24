@@ -69,12 +69,13 @@ async function fixture(scratch, name, dependencyCount = 0) {
   await mkdir(join(cwd, 'src'), { recursive: true });
   execFileSync('git', ['init', '-q', cwd]);
   await Promise.all([
-    writeFile(join(cwd, '.gitignore'), 'generated/\nnode_modules/\n'),
+    writeFile(join(cwd, '.gitignore'), 'generated/\nnode_modules/\n.env*\n'),
     writeFile(join(cwd, 'src', visibleFile), `export const marker = 'visibleNeedle';\n${'x'.repeat(1000)} longNeedle\n`),
     writeFile(join(cwd, '.hidden.ts'), 'export const marker = "hiddenNeedle";\n'),
   ]);
   if (!dependencyCount) {
     await mkdir(join(cwd, 'generated'));
+    await writeFile(join(cwd, '.env.local'), 'scratch configuration\n');
     await writeFile(join(cwd, 'generated', ignoredFile), `refreshReviewedInput(); // ${privateMarker}\n`);
   }
   // 100 files per package, with nested directories typical of dependencies.
@@ -92,7 +93,8 @@ const scenarios = {
   hit: { pattern: 'visibleNeedle' },
   miss: { pattern: 'absentNeedle', path: 'src' },
   ignored: { pattern: 'refreshReviewedInput' },
-  glob: { pattern: 'visibleNeedle', glob: '*.no-such-extension' },
+  glob: { pattern: 'visibleNeedle', path: 'src', glob: '*.no-such-extension' },
+  ignoredGlob: { pattern: 'refreshReviewedInput', glob: 'generated/*.ts' },
   hidden: { pattern: 'hiddenNeedle' },
   truncated: { pattern: 'longNeedle' },
 };
@@ -244,6 +246,7 @@ async function verifyResults(pi, scratch, cwd, manifest) {
           assert.equal(native.details?.linesTruncated, true, 'Fixture must exercise native grep details');
           assert.deepEqual(extended, native);
           break;
+        case 'ignoredGlob':
         case 'miss':
           assert.equal(text(native), 'No matches found');
           assert.deepEqual(extended, native);
