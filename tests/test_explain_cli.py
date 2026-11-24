@@ -38,10 +38,10 @@ class ExplainCliTests(unittest.TestCase):
                 out, err = StringIO(), StringIO()
                 args = ["explain", "--timeout", "0.25", *(["--json"] if as_json else []), "--", "-literal", "-file"]
                 with (self.subTest(status=status, as_json=as_json),
-                      patch("diditsearch.explain_cli.explain", return_value=report) as engine,
+                      patch("diditsearch.explain_cli._explain", return_value=report) as engine,
                       redirect_stdout(out), redirect_stderr(err)):
                     self.assertEqual(main(args), code)
-                    engine.assert_called_once_with("-literal", "-file", None, timeout=0.25)
+                    engine.assert_called_once_with("-literal", "-file", None, timeout=0.25, executable=_rg_path())
                     if as_json:
                         self.assertEqual(err.getvalue(), "")
                         self.assertEqual(json.loads(out.getvalue()), dict(report, follow_up_argv=None))
@@ -57,7 +57,7 @@ class ExplainCliTests(unittest.TestCase):
         report = json.loads(run.stdout)
         self.assertEqual((report["status"], report["files_searched"]), ("no_files", 0))
         follow_up = report["follow_up_argv"]
-        self.assertEqual(follow_up, [_rg_path() if os.name == "nt" else "rg",
+        self.assertEqual(follow_up, [_rg_path(),
                                      "--no-config", "-n", "-F", "--", *args[:2]])
         rerun = subprocess.run(follow_up, cwd=ROOT, capture_output=True, timeout=20)
         self.assertEqual((rerun.returncode, rerun.stderr), (0, b""))
@@ -65,6 +65,18 @@ class ExplainCliTests(unittest.TestCase):
         hit = self.run_cli(*args[:2], "--json")
         self.assertEqual((hit.returncode, hit.stderr), (0, b""))
         self.assertEqual(json.loads(hit.stdout)["status"], "matched")
+
+    def test_json_follow_up_keeps_the_executable_used_for_the_search(self):
+        exe = _rg_path()
+        self.assertIsNotNone(exe)
+        with (TemporaryDirectory() as tmp,
+              patch("diditsearch.explain_cli._rg_path", side_effect=[exe]) as lookup,
+              patch("diditsearch.explain._rg_path", lookup),
+              redirect_stdout(StringIO()) as out):
+            Path(tmp, "app.py").write_text("needle\n")
+            self.assertEqual(main(["explain", "needle", tmp, "--glob", "*.rs", "--json"]), 1)
+            self.assertEqual(json.loads(out.getvalue())["follow_up_argv"][0], exe)
+            lookup.assert_called_once_with()
 
     def test_printed_follow_up_round_trips_hostile_arguments(self):
         name = "- dir '$(echo injected) & echo bad; %TEMP% [x]\u2018\u2019\u201a\u201b"
@@ -91,7 +103,7 @@ class ExplainCliTests(unittest.TestCase):
     def test_follow_up_treats_lone_dash_as_a_filename(self):
         out = StringIO()
         report = dict(status="no_files", detail="Glob selected no files.", files_searched=0)
-        with patch("diditsearch.explain_cli.explain", return_value=report), redirect_stdout(out):
+        with patch("diditsearch.explain_cli._explain", return_value=report), redirect_stdout(out):
             self.assertEqual(main(["explain", "--json", "--glob=*.rs", "--", "-needle", "-"]), 1)
         argv = json.loads(out.getvalue())["follow_up_argv"]
         self.assertEqual(argv[-3:], ["--", "-needle", "./-"])
@@ -104,7 +116,7 @@ class ExplainCliTests(unittest.TestCase):
         detail = "Glob selected no files.\x1b[0m\ninjected"
         report = dict(status="no_files", detail=detail, files_searched=0)
         args = ["explain", "--glob=*.rs", "first\nsecond"]
-        with patch("diditsearch.explain_cli.explain", return_value=report):
+        with patch("diditsearch.explain_cli._explain", return_value=report):
             out = StringIO()
             with redirect_stdout(out):
                 self.assertEqual(main(args), 1)

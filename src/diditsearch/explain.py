@@ -32,11 +32,10 @@ def _rg_path():
 
 
 class _Ripgrep:
-    def __init__(self, deadline):
+    def __init__(self, deadline, executable):
         self.deadline = deadline
         self.left = _OUTPUT_LIMIT
         self.runs = _PROCESS_LIMIT
-        executable = _rg_path()
         if not executable:
             raise ValueError("ripgrep (rg) must be available on PATH.")
         self.command = (os.path.abspath(executable), "--no-config", "--no-follow", "--threads=1")
@@ -228,6 +227,10 @@ def explain(pattern, path=".", glob=None, *, timeout=5.0):
     at most 64 serial invocations. Coverage describes the files observed during
     the search, which can change while the search is running.
     """
+    return _explain(pattern, path, glob, timeout=timeout, executable=_rg_path())
+
+
+def _explain(pattern, path, glob, *, timeout, executable):
     started = time.monotonic()
     matched, searched, excluded, binary = False, 0, 0, 0
     target = None
@@ -246,7 +249,7 @@ def explain(pattern, path=".", glob=None, *, timeout=5.0):
             raise ValueError("Search path must be a regular file or directory.")
         if Path(".git") in map(Path, target.parts):
             return _result("no_files", "Git metadata is outside the search scope.", 0)
-        rg = _Ripgrep(started + timeout)
+        rg = _Ripgrep(started + timeout, executable)
         base = target if directory else target.parent
         root = _walk_root(base)
         # Let ripgrep resolve hidden entries and explicit ignore negations together.
