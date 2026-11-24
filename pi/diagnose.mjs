@@ -10,7 +10,11 @@ const MAX_OUTPUT = 256 * 1024;
 const MAX_RULE = 32 * 1024;
 const MAX_EXAMPLES = 12;
 const CONTROL_FILES = new Set(['.git', '.gitignore', '.ignore', '.rgignore']);
-const ROUTINE_DIRS = new Set(['node_modules', '.venv', '__pycache__', '.pytest_cache']);
+const ROUTINE_DIRS = new Set([
+  'node_modules', '.venv', '__pycache__', '.pytest_cache', '.mypy_cache', '.ruff_cache',
+  '.cache', '.tox', '.nox', '.next', '.nuxt', '.parcel-cache', '.turbo',
+  'build', 'dist', 'coverage', 'target',
+]);
 const UNSAFE = /[\p{Cc}\p{Cf}\p{Cs}\u2028\u2029\ufffd]/u;
 const PI_SPACES = /[\u00a0\u2000-\u200a\u202f\u205f\u3000]/u;
 const DEBUG_LINE = /^(?:rg: )?DEBUG\|([\w:]+)\|.+?:\d+: (.*)$/u;
@@ -40,6 +44,10 @@ function display(path) {
 
 function safeLabel(value) {
   return safeString(value, 200) && !/[<>"\x60]/u.test(value);
+}
+
+function routineName(name) {
+  return ROUTINE_DIRS.has(name) || name === '.env' || name.startsWith('.env.');
 }
 
 async function exists(path) {
@@ -121,9 +129,11 @@ function inventory(executable, cwd, glob, signal) {
   });
 }
 
-function traceEvidence(trace, cwd) {
+function traceEvidence(trace, cwd, exactTarget) {
   const ignored = [];
+  let exactIgnore;
   let globExcluded = false;
+  let hasIgnored = false;
   for (const line of trace.trimEnd().split(/\r?\n/u)) {
     const debug = DEBUG_LINE.exec(line);
     // Errors, unknown output and multiline paths cannot establish coverage.
@@ -136,12 +146,18 @@ function traceEvidence(trace, cwd) {
     if (match[2].startsWith('Ignore(IgnoreMatch(Override(') || match[2] === 'does not match glob') {
       globExcluded = true;
     } else if (match[2].startsWith('Ignore(IgnoreMatch(Gitignore(')) {
-      if (ignored.length < MAX_EXAMPLES && !relative(cwd, path).split(sep).some((part) => CONTROL_FILES.has(part.toLowerCase()))) {
-        ignored.push({ path, rule: RULE.exec(match[2]) });
-      }
+      const parts = relative(cwd, path).toLowerCase().split(sep);
+      if (parts.some((part) => CONTROL_FILES.has(part))) continue;
+      hasIgnored = true;
+      const exact = exactTarget && within(path, exactTarget);
+      const example = ignored.length < MAX_EXAMPLES && !parts.some(routineName);
+      if (!exact && !example) continue;
+      const candidate = { path, rule: RULE.exec(match[2]) };
+      if (exact) exactIgnore ??= candidate;
+      if (example) ignored.push(candidate);
     }
   }
-  return { ignored, globExcluded };
+  return { ignored, exactIgnore, globExcluded, hasIgnored };
 }
 
 async function ruleLocation(rule, cwd, base, skipped, signal) {
@@ -188,15 +204,19 @@ async function directoryExample(path, signal) {
   const dir = await opendir(path, { bufferSize: MAX_EXAMPLES });
   try {
     let file;
+    let hasDirectory = false;
     for (let i = 0; i < MAX_EXAMPLES; i++) {
       signal.throwIfAborted();
       const entry = await dir.read();
-      if (!entry) return file ?? (i ? path + sep : null);
-      if (!entry.isFile() || CONTROL_FILES.has(entry.name.toLowerCase()) || !localPath(entry.name)) continue;
+      if (!entry) return file ?? (hasDirectory ? path + sep : null);
+      const name = entry.name.toLowerCase();
+      if (CONTROL_FILES.has(name) || routineName(name) || !localPath(entry.name)) continue;
+      if (entry.isDirectory()) hasDirectory = true;
+      if (!entry.isFile()) continue;
       if (file) break;
       file = join(path, entry.name);
     }
-    return path + sep;
+    return file || hasDirectory ? path + sep : null;
   } finally {
     await dir.close();
   }
@@ -217,7 +237,7 @@ async function localDirectory(cwd, target, signal) {
   return { base, root };
 }
 
-async function ignoredMessage(example, { path, rule }, root, base, signal) {
+async function ignoredMessage(example, { path, rule }, root, base, signal, requireOrigin = false) {
   const label = display(relative(base, example)) + (example.endsWith(sep) ? '/' : '');
   if (!safeLabel(label)) return null;
   const origin = await ruleLocation(rule, root, base, path, signal);
@@ -227,23 +247,24 @@ async function ignoredMessage(example, { path, rule }, root, base, signal) {
     const precise = skipped + ' by "' + origin.pattern + '" at ' + origin.location + next;
     if (precise.length <= 340) return precise;
   }
-  return skipped + ' by an ignore rule' + next;
+  return requireOrigin ? null : skipped + ' by an ignore rule' + next;
 }
 
-async function ignoredGlobTarget(glob, ignored, root, base, signal) {
+function exactGlobTarget(glob, root) {
   // A literal, directory-qualified glob can name a file behind a pruned
   // ancestor. Other globs would require exploring possibly irrelevant trees.
-  if (!/^\/?(?:[a-z0-9._-]+\/)+[a-z0-9._-]+$/iu.test(glob)) return null;
+  if (!glob || !/^\/?(?:[a-z0-9._-]+\/)+[a-z0-9._-]+$/iu.test(glob)) return null;
   const name = glob.replace(/^\//u, '');
   if (!localPath(name) || name.split('/').some((part) => part === '.' || part === '..' ||
       CONTROL_FILES.has(part.toLowerCase()))) return null;
-  const target = resolve(root, name);
-  const candidate = ignored.find(({ path }) => within(path, target));
-  if (!candidate) return null;
+  return resolve(root, name);
+}
+
+async function ignoredGlobTarget(target, candidate, root, base, signal) {
   try {
     if (!(await localDirectory(root, dirname(target), signal)) || !(await lstat(target)).isFile()) return null;
-    if (display(relative(root, await realpath(target))) !== name) return null;
-    return await ignoredMessage(target, candidate, root, base, signal);
+    if (await realpath(target) !== target) return null;
+    return await ignoredMessage(target, candidate, root, base, signal, true);
   } catch {
     return null;
   }
@@ -268,12 +289,15 @@ async function explain({ input, cwd, rgPath }, signal) {
 
   const result = await inventory(executable, root, glob, signal);
   if (!result || result.files.includes('\ufffd')) return null;
-  const evidence = traceEvidence(result.trace, root);
+  const exactTarget = exactGlobTarget(glob, root);
+  const evidence = traceEvidence(result.trace, root, exactTarget);
   if (!evidence) return null;
   if (glob !== undefined) {
     if (result.files) return null;
-    const diagnosis = await ignoredGlobTarget(glob, evidence.ignored, root, base, signal);
-    if (diagnosis || !evidence.globExcluded) return diagnosis;
+    if (evidence.exactIgnore) return ignoredGlobTarget(exactTarget, evidence.exactIgnore, root, base, signal);
+    // A pruned tree can contain a glob match. Its trace proves exclusion, not
+    // what the glob would have selected inside it.
+    if (!evidence.globExcluded || (!exactTarget && evidence.hasIgnored)) return null;
     return 'The glob selected no files in Pi’s search scope. Check it relative to the search directory.';
   }
 
@@ -281,7 +305,7 @@ async function explain({ input, cwd, rgPath }, signal) {
   for (const candidate of evidence.ignored.sort((a, b) => a.path < b.path ? -1 : Number(a.path > b.path))) {
     signal.throwIfAborted();
     const { path } = candidate;
-    if (included.has(path) || relative(root, path).split(sep).some((part) => ROUTINE_DIRS.has(part.toLowerCase()))) continue;
+    if (included.has(path)) continue;
     const entry = await lstat(path);
     if (!entry.isFile() && !entry.isDirectory()) continue;
     if (relative(path, await realpath(path))) continue;

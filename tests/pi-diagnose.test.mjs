@@ -50,14 +50,75 @@ nativeTest('identifies the ignored caller and the exact native ignore rule', asy
   assert.match(await diagnose({ cwd, input: scoped }), /Skipped "generated\/client\.ts" by "generated\/" at \.gitignore:1/u);
 });
 
-nativeTest('routine ignored dependencies and caches alone produce no note', async (t) => {
+nativeTest('routine dotenv, dependency, build, and self-ignored cache paths do not mask generated source', async (t) => {
+  const envFiles = Object.fromEntries(Array.from({ length: 16 }, (_, index) => [`.env.local-${index}`, input.pattern]));
   const cwd = await fixture(t, {
-    '.ignore': 'node_modules/\n.venv/\n',
+    '.git/info/exclude': '',
+    '.gitignore': '.env\n.env.*\nnode_modules/\n.venv/\n__pycache__/\n.pytest_cache/\nbuild/\ndist/\ncoverage/\ntarget/\ngenerated/\n',
+    '.env': input.pattern,
+    ...envFiles,
     'src/main.ts': 'ordinary source',
     'node_modules/pkg/index.js': 'package contents',
     '.venv/lib/module.py': 'environment contents',
+    'lib/__pycache__/module.pyc': 'compiled Python',
+    '.pytest_cache/v/cache/nodeids': 'test cache',
+    '.mypy_cache/.gitignore': '*\n',
+    '.mypy_cache/3.12/module.data.json': 'type cache',
+    '.ruff_cache/.gitignore': '*\n',
+    '.ruff_cache/0.15.0/cache-entry': 'lint cache',
+    'build/temp/module.o': 'build output',
+    'dist/bundle.js': 'bundled source',
+    'coverage/lcov.info': 'coverage output',
+    'crates/cli/target/debug/cli': 'compiled output',
+  });
+  assert.equal(nativeMatches(cwd).length, 0);
+  assert.equal(await diagnose({ cwd, input }), null);
+  const empty = { ...input, path: 'src', glob: '*.no-such-extension' };
+  assert.equal(nativeMatches(cwd, empty).length, 0);
+  assert.match(await diagnose({ cwd, input: empty }), /glob selected no files/u);
+
+  await mkdir(join(cwd, 'generated', 'dist'), { recursive: true });
+  await writeFile(join(cwd, 'generated', '.env.local'), input.pattern);
+  await writeFile(join(cwd, 'generated', 'dist', 'bundle.js'), input.pattern);
+  assert.equal(await diagnose({ cwd, input }), null);
+
+  await writeFile(join(cwd, 'generated', 'client.ts'), input.pattern);
+  assert.equal(nativeMatches(cwd).length, 0);
+  assert.match(await diagnose({ cwd, input }), /Skipped "generated\/client\.ts" by "generated\/" at \.gitignore:11/u);
+});
+
+nativeTest('stays quiet when an explicit wildcard can match inside an ignored build directory', async (t) => {
+  const cwd = await fixture(t, {
+    '.git/info/exclude': '',
+    '.gitignore': 'dist/\n',
+    'dist/client.ts': input.pattern,
+    'src/main.js': 'ordinary source',
   });
   assert.equal(await diagnose({ cwd, input }), null);
+  for (const glob of ['dist/*.ts', '*.ts']) {
+    const scoped = { ...input, glob };
+    assert.equal(nativeMatches(cwd, scoped).length, 0, glob);
+    assert.equal(await diagnose({ cwd, input: scoped }), null, glob);
+  }
+});
+
+nativeTest('stays quiet for wildcard misses when an ignored tree could contain a match', async (t) => {
+  const cwd = await fixture(t, {
+    '.git/info/exclude': '',
+    '.gitignore': 'generated/\n',
+    'generated/sdk/client.ts': input.pattern,
+    'src/main.js': 'ordinary source',
+  });
+  for (const glob of ['*.ts', 'generated/**/*.ts', '**/client.ts']) {
+    const scoped = { ...input, glob };
+    assert.equal(nativeMatches(cwd, scoped).length, 0, glob);
+    assert.equal(await diagnose({ cwd, input: scoped }), null, glob);
+  }
+  const exact = { ...input, glob: 'generated/sdk/client.ts' };
+  assert.equal(nativeMatches(cwd, exact).length, 0);
+  assert.match(await diagnose({ cwd, input: exact }), /Skipped "generated\/sdk\/client\.ts" by "generated\/" at \.gitignore:1/u);
+  await writeFile(join(cwd, '.gitignore'), 'generated/\ngenerated/\n');
+  assert.equal(await diagnose({ cwd, input: exact }), null);
 });
 
 nativeTest('reports a grouped ignored directory from the search root without walking its descendants', async (t) => {
