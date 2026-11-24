@@ -417,17 +417,22 @@ def _explain(pattern, path, glob, *, timeout, executable):
         selected = scope | _selected(rg, target, directory, glob) if directory else scope
         skipped = dict.fromkeys(selected - eligible, "ignored")
         ignored = len(skipped)
-        examples = _sample(base, selected, skipped, binaries, rg.remaining)
-        if directory:
-            all_selected = _files(rg, target, "--no-ignore", "--hidden", *glob_args) | selected
-            hidden_paths = {p for p in all_selected - selected if Path(p.name) not in _CONTROL_NAMES}
-            hidden = len(hidden_paths)
-            if hidden_paths:
-                skipped.update(dict.fromkeys(hidden_paths, "hidden"))
-                examples = _sample(base, all_selected, skipped, binaries, rg.remaining)
-        elif not selected and Path(target.name) not in _CONTROL_NAMES:
-            examples = [_skip(base, target, "excluded")]
-        rg.remaining()
+        # The search verdict is known. Extra evidence can use only the remaining budget.
+        extra_detail = ""
+        try:
+            examples = _sample(base, selected, skipped, binaries, rg.remaining)
+            if directory:
+                all_selected = _files(rg, target, "--no-ignore", "--hidden", *glob_args) | selected
+                hidden_paths = {p for p in all_selected - selected if Path(p.name) not in _CONTROL_NAMES}
+                hidden = len(hidden_paths)
+                if hidden_paths:
+                    skipped.update(dict.fromkeys(hidden_paths, "hidden"))
+                    examples = _sample(base, all_selected, skipped, binaries, rg.remaining)
+            elif not selected and Path(target.name) not in _CONTROL_NAMES:
+                examples = [_skip(base, target, "excluded")]
+            rg.remaining()
+        except (_Incomplete, OSError) as exc:
+            extra_detail = f" Exclusion examples incomplete: {exc}"
     except (FileNotFoundError, NotADirectoryError):
         if target is None:
             return _result("missing_path", "The requested path does not exist.", 0)
@@ -443,18 +448,18 @@ def _explain(pattern, path, glob, *, timeout, executable):
     except (ValueError, TypeError) as exc:
         return _result("error", str(exc), skipped_paths=examples)
 
-    if any(item["kind"] == "ignored" for item in examples):
+    if not extra_detail and any(item["kind"] == "ignored" for item in examples):
         try:
             _attribute(rg, root, base, examples)
         except (_Incomplete, OSError):
             pass  # Optional provenance can run out of time after exclusions are accounted for.
     if not selected:
         detail = "No files were selected by the requested scope." + _skip_note(ignored, hidden, binary)
-        return _result("no_files", detail, 0, skipped_paths=examples, coverage_complete=True)
+        return _result("no_files", detail + extra_detail, 0, skipped_paths=examples, coverage_complete=not extra_detail)
 
     detail = "Found no literal match in the searched text files." if searched else "No eligible text files were searched."
     if matched:
         detail = "Found a literal match."
     status = "matched" if matched else "partial" if ignored or binary else "no_match"
-    return _result(status, detail + _skip_note(ignored, hidden, binary), searched,
-                   skipped_paths=examples, coverage_complete=True)
+    return _result(status, detail + _skip_note(ignored, hidden, binary) + extra_detail, searched,
+                   skipped_paths=examples, coverage_complete=not extra_detail)

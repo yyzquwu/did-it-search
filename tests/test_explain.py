@@ -234,6 +234,15 @@ class ExplainTests(unittest.TestCase):
         self.assertEqual(report["skipped_paths"], [self.skip("generated/client.ts", "ignored"),
                                                    self.skip("b.txt", "binary")])
 
+    def test_hidden_inventory_limit_preserves_completed_visible_miss(self):
+        self.put("visible.txt", b"other")
+        for i in range(12):
+            self.put(f".cache/long-generated-filename-{i}.txt", b"needle")
+        with patch("diditsearch.explain._OUTPUT_LIMIT", 180):
+            report = self.report("no_match", 1)
+        self.assertFalse(report["coverage_complete"])
+        self.assertIn("output limit", report["detail"])
+
     def test_hidden_directory_and_binary_are_reported_separately(self):
         self.put(".gitignore", b"other/\n")
         self.put(".git/metadata.txt", b"needle")
