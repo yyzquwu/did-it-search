@@ -37,7 +37,9 @@ The first command exits 1 because the glob selects zero files. The second finds 
 
 `explain` needs only Python and ripgrep after installation. It runs locally with a five-second budget by default. Use `--timeout 15` to allow more time. Exit 0 means a confirmed match. Exit 1 means the search completed with no match or selected zero files. Exit 2 means coverage was partial, the path was missing, or the command encountered an error. In JSON, `files_searched` is null when the count is unknown. A suggested follow-up runs only if you choose to execute it.
 
-The report shows up to three representative skipped paths. A directory entry can represent many files. In JSON, `skipped_paths` carries these examples and `follow_up_argv` holds the optional command as an argument list. A missing rule source means the cause could not be attributed to a specific rule. The suggested command lets you check a named file yourself. Its appearance says nothing about whether that file contains the literal.
+The report shows up to three representative skipped paths. A directory entry can represent many files. In JSON, `skipped_paths` carries these examples and `follow_up_argv` holds the optional command as an argument list. A true `coverage_complete` means the tool finished accounting for the requested scope. A `partial` result can still have complete accounting when all exclusions are known.
+
+Rule details come from Git for ordinary repository `.gitignore` entries. If Git is unavailable or competing ignore sources make attribution uncertain, the path can still appear with a null `rule`. A named skipped file is a place to check. The optional follow-up is what determines whether the literal is there.
 
 Directory globs are relative to the directory you pass. The command checks ignore rules even for an explicitly named file or a positive glob. It can count excluded paths by name and leaves their contents unread. Counts include eligible empty files. Binary files are identified by NUL bytes after ripgrep decodes the input. A confirmed text match can coexist with exclusions.
 

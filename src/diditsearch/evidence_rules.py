@@ -172,10 +172,12 @@ def _check_ignore(git, names, root, remaining):
 
 
 def git_rules(paths, root, remaining):
-    """Map sampled absolute Paths to verified repository-relative Git ignore rules.
+    """Return verified rules for up to 16 observed absolute file or directory Paths.
 
-    Only ordinary worktrees and unambiguous per-directory .gitignore matches
-    are supported. Git is optional. The caller's deadline exception propagates.
+    Root is the absolute Path to the worktree root. Each mapped Path gets a
+    repository-relative POSIX source, a one-based line number and Git's pattern.
+    Missing Git and ambiguous matches leave paths out of the mapping. The
+    deadline callback supplies the probe timeout and its exception propagates.
     """
     paths = tuple(islice(paths, _MAX_SAMPLES))
     if not paths:

@@ -56,7 +56,7 @@ class CliTests(unittest.TestCase):
             sentinel = root / "app.ts"
             sentinel.write_bytes(b"legacy_export();\n")
             env = dict(os.environ, TMPDIR=str(temp), TEMP=str(temp), TMP=str(temp),
-                       GIT_DIR=str(root / "unrelated.git"))
+                       GIT_DIR=str(root / "unrelated.git"), GIT_CONFIG_GLOBAL=str(root / "my-gitconfig"))
             demo = self.run_cli("demo", cwd=root, env=env)
             self.assertEqual((demo.returncode, demo.stderr), (0, b""))
             output = demo.stdout.decode().replace("\\", "/")

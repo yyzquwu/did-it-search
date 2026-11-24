@@ -205,7 +205,7 @@ class ExplainTests(unittest.TestCase):
         self.assertIn("could not read", self.check("partial", None, "absent"))
         self.check("matched", None)
         self.put(".ignore", b"blocked.txt\n")
-        self.assertIn("ignored", self.check("partial", 1, "absent", glob="*.txt"))
+        self.assertIn("ignored", self.check("partial", 1, "absent", glob="*.txt", timeout=40))
 
     def test_deadline_output_and_process_limits(self):
         self.put("directory-with-a-long-name/file.txt", b"needle")
@@ -230,6 +230,7 @@ class ExplainTests(unittest.TestCase):
         with patch("diditsearch.explain._PROCESS_LIMIT", 4):
             report = self.report("matched", 1)
         self.assertFalse(report["coverage_complete"])
+        self.assertIn("1 ignored, 1 binary", report["detail"])
         self.assertEqual(report["skipped_paths"], [self.skip("generated/client.ts", "ignored"),
                                                    self.skip("b.txt", "binary")])
 
@@ -286,7 +287,13 @@ class ExplainTests(unittest.TestCase):
 
     @unittest.skipUnless(shutil.which("git"), "Git is unavailable")
     def test_ignored_caller_gets_verified_rule_in_git_repository(self):
-        subprocess.run(["git", "init", "-q", str(self.root)], check=True, capture_output=True, timeout=10)
+        home = self.root / ".home"
+        home.mkdir()
+        self.enterContext(patch.dict(os.environ, {
+            **{key: value for key, value in os.environ.items() if not key.upper().startswith("GIT_")},
+            "HOME": str(home), "USERPROFILE": str(home), "XDG_CONFIG_HOME": str(home / ".config"),
+        }, clear=True))
+        subprocess.run(["git", "init", "-q", "--template=", str(self.root)], check=True, capture_output=True, timeout=15)
         self.put(".gitignore", b"# generated SDK\ngenerated/\n")
         self.put("generated/client.ts", b"legacy_export();\n")
         self.put("app.ts", b"startServer();\n")

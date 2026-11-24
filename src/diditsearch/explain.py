@@ -305,6 +305,12 @@ def _result(status, detail, files_searched=None, *, skipped_paths=(), coverage_c
             "skipped_paths": list(skipped_paths), "coverage_complete": coverage_complete}
 
 
+def _skip_note(ignored, hidden, binary):
+    notes = [f"{count} {kind}" for kind, count in (("ignored", ignored), ("hidden", hidden), ("binary", binary))
+             if count]
+    return " Files skipped (" + ", ".join(notes) + ")." if notes else ""
+
+
 def explain(pattern, path=".", glob=None, *, timeout=5.0) -> ExplainReport:
     """Explain a local search without reading the contents of ignored or linked files.
 
@@ -342,7 +348,8 @@ def explain(pattern, path=".", glob=None, *, timeout=5.0) -> ExplainReport:
 
 def _explain(pattern, path, glob, *, timeout, executable):
     started = time.monotonic()
-    matched, searched, binary = False, 0, 0
+    matched = False
+    searched = ignored = hidden = binary = 0
     target = None
     count = None
     examples, binaries = [], []
@@ -408,15 +415,15 @@ def _explain(pattern, path, glob, *, timeout, executable):
         count = searched
         # Count excluded names after searching so a large ignored tree cannot hide a verified hit.
         selected = scope | _selected(rg, target, directory, glob) if directory else scope
-        ignored = selected - eligible
-        skipped = dict.fromkeys(ignored, "ignored")
+        skipped = dict.fromkeys(selected - eligible, "ignored")
+        ignored = len(skipped)
         examples = _sample(base, selected, skipped, binaries, rg.remaining)
-        hidden = set()
         if directory:
             all_selected = _files(rg, target, "--no-ignore", "--hidden", *glob_args) | selected
-            hidden = {p for p in all_selected - selected if Path(p.name) not in _CONTROL_NAMES}
-            if hidden:
-                skipped.update(dict.fromkeys(hidden, "hidden"))
+            hidden_paths = {p for p in all_selected - selected if Path(p.name) not in _CONTROL_NAMES}
+            hidden = len(hidden_paths)
+            if hidden_paths:
+                skipped.update(dict.fromkeys(hidden_paths, "hidden"))
                 examples = _sample(base, all_selected, skipped, binaries, rg.remaining)
         elif not selected and Path(target.name) not in _CONTROL_NAMES:
             examples = [_skip(base, target, "excluded")]
@@ -424,14 +431,15 @@ def _explain(pattern, path, glob, *, timeout, executable):
     except (FileNotFoundError, NotADirectoryError):
         if target is None:
             return _result("missing_path", "The requested path does not exist.", 0)
-        return _result("matched" if matched else "partial", "The search scope changed during the search.", count,
-                       skipped_paths=examples)
+        detail = "The search scope changed during the search." + _skip_note(ignored, hidden, binary)
+        return _result("matched" if matched else "partial", detail, count, skipped_paths=examples)
     except _Incomplete as exc:
         detail = f"Found a literal match. {exc}" if matched else str(exc)
-        return _result("matched" if matched else "partial", detail, count, skipped_paths=examples)
+        return _result("matched" if matched else "partial", detail + _skip_note(ignored, hidden, binary), count,
+                       skipped_paths=examples)
     except OSError as exc:
         status = "matched" if matched else "partial" if count is not None else "error"
-        return _result(status, str(exc), count, skipped_paths=examples)
+        return _result(status, str(exc) + _skip_note(ignored, hidden, binary), count, skipped_paths=examples)
     except (ValueError, TypeError) as exc:
         return _result("error", str(exc), skipped_paths=examples)
 
@@ -441,22 +449,12 @@ def _explain(pattern, path, glob, *, timeout, executable):
         except (_Incomplete, OSError):
             pass  # Optional provenance can run out of time after exclusions are accounted for.
     if not selected:
-        detail = "No files were selected by the requested scope."
-        if hidden:
-            detail += f" Files skipped ({len(hidden)} hidden)."
+        detail = "No files were selected by the requested scope." + _skip_note(ignored, hidden, binary)
         return _result("no_files", detail, 0, skipped_paths=examples, coverage_complete=True)
 
-    notes = []
-    if ignored:
-        notes.append(f"{len(ignored)} ignored")
-    if hidden:
-        notes.append(f"{len(hidden)} hidden")
-    if binary:
-        notes.append(f"{binary} binary")
     detail = "Found no literal match in the searched text files." if searched else "No eligible text files were searched."
     if matched:
         detail = "Found a literal match."
-    if notes:
-        detail += " Files skipped (" + ", ".join(notes) + ")."
     status = "matched" if matched else "partial" if ignored or binary else "no_match"
-    return _result(status, detail, searched, skipped_paths=examples, coverage_complete=True)
+    return _result(status, detail + _skip_note(ignored, hidden, binary), searched,
+                   skipped_paths=examples, coverage_complete=True)

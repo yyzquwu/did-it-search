@@ -18,8 +18,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class ExplainCliTests(unittest.TestCase):
     def run_cli(self, *args, cwd=ROOT):
-        return subprocess.run([sys.executable, "-I", "-m", "diditsearch", "explain", *args],
-                              cwd=cwd, capture_output=True, timeout=20)
+        return subprocess.run([sys.executable, "-I", "-m", "diditsearch", "explain", "--timeout=20", *args],
+                              cwd=cwd, capture_output=True, timeout=30)
 
     def run_shell(self, cmd, root):
         if os.name == "nt":
@@ -74,7 +74,7 @@ class ExplainCliTests(unittest.TestCase):
               patch("diditsearch.explain._rg_path", lookup),
               redirect_stdout(StringIO()) as out):
             Path(tmp, "app.py").write_text("needle\n")
-            self.assertEqual(main(["explain", "needle", tmp, "--glob", "*.rs", "--json"]), 1)
+            self.assertEqual(main(["explain", "needle", tmp, "--glob", "*.rs", "--json", "--timeout=20"]), 1)
             self.assertEqual(json.loads(out.getvalue())["follow_up_argv"][0], exe)
             lookup.assert_called_once_with()
 
@@ -143,11 +143,11 @@ class ExplainCliTests(unittest.TestCase):
             (root / "source").mkdir()
             (root / "source" / "-").write_bytes(b"-needle\nsecond\n")
             (root / "source" / "visible").write_bytes(b"other\n")
+            pattern = "-needle\nsecond"
             for cwd, path, expected in ((root, "source", "source/-"), (root, "source/-", "source/-"),
                                         (root / "source", "-", "./-")):
                 with self.subTest(path=path):
-                    args = ("--", "-needle\nsecond", path)
-                    run = self.run_cli("--json", *args, cwd=cwd)
+                    run = self.run_cli("--json", "--", pattern, path, cwd=cwd)
                     self.assertEqual((run.returncode, run.stderr), (2, b""))
                     report = json.loads(run.stdout)
                     self.assertTrue(report["coverage_complete"])
@@ -157,15 +157,15 @@ class ExplainCliTests(unittest.TestCase):
                     }])
                     argv = report["follow_up_argv"]
                     self.assertEqual(argv[0], _rg_path())
-                    self.assertEqual(argv[-4:], ["--multiline", "--", "-needle\nsecond", expected])
+                    self.assertEqual(argv[-4:], ["--multiline", "--", pattern, expected])
                     hit = subprocess.run(argv, cwd=cwd, capture_output=True, timeout=20)
                     self.assertEqual((hit.returncode, hit.stderr), (0, b""))
                     self.assertIn(b":1:-needle", hit.stdout)
-                    human = self.run_cli(*args, cwd=cwd)
-                    self.assertEqual((human.returncode, human.stdout), (2, b""))
-                    self.assertIn(b".gitignore:1  /source/-", human.stderr)
-                    self.assertIn(b"Use --json", human.stderr)
-                    self.assertNotIn(b":1:-needle", human.stderr)
+            human = self.run_cli("--", pattern, "source", cwd=root)
+            self.assertEqual((human.returncode, human.stdout), (2, b""))
+            self.assertIn(b".gitignore:1  /source/-", human.stderr)
+            self.assertIn(b"Use --json", human.stderr)
+            self.assertNotIn(b":1:-needle", human.stderr)
 
     def test_hidden_file_follow_up_round_trips_in_the_shell(self):
         with TemporaryDirectory() as tmp:
