@@ -3,6 +3,32 @@ on: [push, pull_request]
 permissions:
   contents: read
 jobs:
+  pi-extension:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        pi: ["1.5.1", "1.6.0"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: ${{ matrix.pi == '1.5.1' && '22.19.0' || '24' }}
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y ripgrep strace
+      - if: runner.os == 'Windows'
+        run: if (-not (Get-Command rg -ErrorAction SilentlyContinue)) { choco install ripgrep -y }
+      - run: node --test tests/pi-hook.test.mjs tests/pi-diagnose.test.mjs
+      - name: Run native Pi grep and verify ignored file contents stay unread
+        shell: bash
+        env:
+          PI_VERSION: ${{ matrix.pi }}
+        run: |
+          host="$RUNNER_TEMP/did-it-search-pi"
+          npm install --prefix "$host" --ignore-scripts --no-audit --no-fund "@earendil-works/pi-coding-agent@$PI_VERSION"
+          node tests/pi-integration.mjs --pi-root "$host" --audit-reads
   test:
     strategy:
       matrix:
@@ -48,7 +74,7 @@ jobs:
         run: |
           mkdir consumer-project
           cd consumer-project
-          npm install --ignore-scripts --no-audit --no-fund @earendil-works/pi-coding-agent@1.5.1
+          npm install --prefix . --ignore-scripts --no-audit --no-fund @earendil-works/pi-coding-agent@1.5.1
           did-it-search baseline
       - name: Run the composite action as a consumer
         if: github.event_name == 'push' && matrix.python == '3.12'

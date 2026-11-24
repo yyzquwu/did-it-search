@@ -1,25 +1,25 @@
-name: Publish v0.5.0 to PyPI
+name: Publish v0.6.0 to PyPI
 
 on:
   workflow_dispatch:
     inputs:
       reviewed_commit:
-        description: Full commit SHA reviewed for tag v0.5.0
+        description: Full commit SHA reviewed for tag v0.6.0
         required: true
         type: string
       wheel_sha256:
-        description: Reviewed SHA256 of did_it_search-0.5.0-py3-none-any.whl
+        description: Reviewed SHA256 of did_it_search-0.6.0-py3-none-any.whl
         required: true
         type: string
       sdist_sha256:
-        description: Reviewed SHA256 of did_it_search-0.5.0.tar.gz
+        description: Reviewed SHA256 of did_it_search-0.6.0.tar.gz
         required: true
         type: string
 
 permissions: {}
 
 concurrency:
-  group: pypi-v0.5.0
+  group: pypi-v0.6.0
   cancel-in-progress: false
 
 jobs:
@@ -38,9 +38,9 @@ jobs:
           WHEEL_SHA256: ${{ inputs.wheel_sha256 }}
           SDIST_SHA256: ${{ inputs.sdist_sha256 }}
         run: |
-          tag=v0.5.0
-          wheel=did_it_search-0.5.0-py3-none-any.whl
-          sdist=did_it_search-0.5.0.tar.gz
+          tag=v0.6.0
+          wheel=did_it_search-0.6.0-py3-none-any.whl
+          sdist=did_it_search-0.6.0.tar.gz
 
           if [[ ! "$REVIEWED_COMMIT" =~ ^[[:xdigit:]]{40}$ ||
                 ! "$WHEEL_SHA256" =~ ^[[:xdigit:]]{64}$ ||
@@ -49,7 +49,7 @@ jobs:
             exit 1
           fi
           if [[ "$GITHUB_REF" != "refs/tags/$tag" || "$GITHUB_SHA" != "${REVIEWED_COMMIT,,}" ]]; then
-            echo 'Dispatch on v0.5.0 at the reviewed commit.' >&2
+            echo 'Dispatch on v0.6.0 at the reviewed commit.' >&2
             exit 1
           fi
 
@@ -74,10 +74,10 @@ jobs:
         id: stage
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: reviewed-v0.5.0-${{ github.run_attempt }}
+          name: reviewed-v0.6.0-${{ github.run_attempt }}
           path: |
-            dist/did_it_search-0.5.0-py3-none-any.whl
-            dist/did_it_search-0.5.0.tar.gz
+            dist/did_it_search-0.6.0-py3-none-any.whl
+            dist/did_it_search-0.6.0.tar.gz
           if-no-files-found: error
 
   publish:
@@ -109,11 +109,11 @@ jobs:
           WHEEL_SHA256: ${{ inputs.wheel_sha256 }}
           SDIST_SHA256: ${{ inputs.sdist_sha256 }}
         run: |
-          curl --fail --silent --show-error --retry 8 --retry-all-errors --retry-delay 5 \
-            https://pypi.org/pypi/did-it-search/0.5.0/json > release.json
+          curl --fail --silent --show-error --retry 18 --retry-all-errors --retry-delay 5 \
+            https://pypi.org/pypi/did-it-search/0.6.0/json > release.json
           jq -e --arg wheel "${WHEEL_SHA256,,}" --arg sdist "${SDIST_SHA256,,}" '
             [.urls[] | {key: .filename, value: .digests.sha256}] | from_entries ==
-            {"did_it_search-0.5.0-py3-none-any.whl": $wheel, "did_it_search-0.5.0.tar.gz": $sdist}
+            {"did_it_search-0.6.0-py3-none-any.whl": $wheel, "did_it_search-0.6.0.tar.gz": $sdist}
           ' release.json
       - name: Try the public install in a fresh project
         shell: bash
@@ -125,20 +125,47 @@ jobs:
           export UV_DEFAULT_INDEX=https://pypi.org/simple
           mkdir sample && cd sample
           echo 'load_settings()' > app.py
-          test "$("$uvx" --from did-it-search==0.5.0 did-it-search --version)" = 'did-it-search 0.5.0'
+          # PyPI's simple index and version metadata can update at different times.
+          for attempt in {1..12}; do
+            if "$uvx" --refresh --from did-it-search==0.6.0 did-it-search --version > "$RUNNER_TEMP/version"; then break; fi
+            sleep 5
+          done
+          test "$(cat "$RUNNER_TEMP/version")" = 'did-it-search 0.6.0'
           code=0
-          "$uvx" --from did-it-search==0.5.0 did-it-search explain load_settings . --glob '*.rs' --json > "$RUNNER_TEMP/miss.json" || code=$?
+          "$uvx" --from did-it-search==0.6.0 did-it-search explain load_settings . --glob '*.rs' --json > "$RUNNER_TEMP/miss.json" || code=$?
           test "$code" -eq 1
           jq -e '.status == "no_files" and .files_searched == 0' "$RUNNER_TEMP/miss.json"
-          "$uvx" --from did-it-search==0.5.0 did-it-search explain load_settings . --json | jq -e '.status == "matched"'
-          "$uvx" --from did-it-search==0.5.0 did-it-search demo
+          "$uvx" --from did-it-search==0.6.0 did-it-search explain load_settings . --json | jq -e '.status == "matched"'
+          "$uvx" --from did-it-search==0.6.0 did-it-search demo
           git init -q
           mkdir generated
           printf 'generated/\n' > .gitignore
           printf 'legacy_export();\n' > generated/client.ts
           code=0
-          "$uvx" --from did-it-search==0.5.0 did-it-search explain legacy_export . --json > "$RUNNER_TEMP/partial.json" || code=$?
+          "$uvx" --from did-it-search==0.6.0 did-it-search explain legacy_export . --json > "$RUNNER_TEMP/partial.json" || code=$?
           test "$code" -eq 2
           jq -e '.status == "partial" and any(.skipped_paths[];
             .path == "generated/client.ts" and .rule.source == ".gitignore" and .rule.line == 1
             and .rule.pattern == "generated/")' "$RUNNER_TEMP/partial.json"
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: "24"
+      - name: Install the tagged extension in an empty Pi profile
+        shell: bash
+        run: |
+          mkdir "$RUNNER_TEMP/pi-host"
+          cd "$RUNNER_TEMP/pi-host"
+          npm install --prefix . --ignore-scripts --no-audit --no-fund @earendil-works/pi-coding-agent@1.6.0
+          export PI_CODING_AGENT_DIR="$RUNNER_TEMP/pi-user"
+          source_ref="git:github.com/yyzquwu/did-it-search@v0.6.0"
+          node_modules/.bin/pi install "$source_ref"
+          node_modules/.bin/pi list | grep -F -- "$source_ref"
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import { DefaultResourceLoader } from '@earendil-works/pi-coding-agent';
+          const loader = new DefaultResourceLoader({ cwd: process.cwd(), agentDir: process.env.PI_CODING_AGENT_DIR });
+          await loader.reload();
+          const { errors, extensions } = loader.getExtensions();
+          assert.deepEqual(errors, []);
+          assert.equal(extensions.filter(e => e.handlers.has('tool_result')).length, 1);
+          JS

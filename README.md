@@ -1,6 +1,39 @@
 # Did It Search?
 
-Find out why a repository search came back empty. See which paths were skipped, the ignore rule when it can be verified, and a command to check a specific file.
+Find out why a repository search came back empty. Get a short explanation inside Pi, or use the standalone CLI to inspect skipped paths and verified ignore rules.
+
+## Use it in Pi
+
+Install the extension from the release tag, then start Pi with its built-in grep tool enabled:
+
+```sh
+pi install git:github.com/yyzquwu/did-it-search@v0.6.0
+pi --tools +grep
+```
+
+The extension activates with Pi **1.5.1 and 1.6.0** and uses local ripgrep. In an open repository, try asking Pi: *“Use the grep tool with literal set to true to look for legacy_export.”* If the target directory was ignored, the result can look like this:
+
+```text
+No matches found
+[Did It Search] Skipped "generated/ignored-caller.ts" by "generated/" at .gitignore:1. Ask before inspecting this path.
+```
+
+The original Pi result is kept. A note names an excluded path or explains that a glob selected zero files; confirming a match in a skipped file takes another search. The extension does not open skipped source files or execute a suggested follow-up. A hit starts zero diagnostic processes. A miss with no actionable evidence stays quiet, including a repository where only common dependency or cache folders were excluded.
+
+Diagnostics cover the stock local grep tool, a case-sensitive literal, default context and result limit, and a supported project-relative directory. Pi includes hidden files by default. The extension follows that scope and suppresses its note when it cannot verify a result within its time or output budget. Custom grep tools, shell commands and regex searches pass through. Installing the extension adds no Python dependency.
+
+To remove it, run `pi remove git:github.com/yyzquwu/did-it-search@v0.6.0`.
+
+### Reproduce the Pi example
+
+From a checkout with Node 22.19+, Git and ripgrep, install the SDK in a scratch directory and run the offline comparison:
+
+```sh
+npm install --prefix ./node_modules/pi-test-host --ignore-scripts --no-audit --no-fund @earendil-works/pi-coding-agent@1.6.0
+node tests/pi-integration.mjs --pi-root ./node_modules/pi-test-host --demo
+```
+
+The test scripts the model's tool call and runs Pi's actual grep and extension machinery with the extension off and on. No model key is needed. Replace `--demo` with `--bench` for timings on fixtures with 100 and 10,000 ignored dependency files. Use `--audit-reads` separately to verify ignored contents stay unread (Windows PowerShell or Linux with `strace`).
 
 ## Try the ignored-caller demo
 
@@ -12,7 +45,7 @@ uvx did-it-search demo
 
 The demo creates a temporary Git repository where the only caller of `legacy_export` is in `generated/client.ts`. It runs a search that misses the caller, shows the file and its ignore rule, then runs the suggested command on the demo file so you can see the call.
 
-![Terminal recording of a skipped caller, its Git ignore rule, and the matching line](https://raw.githubusercontent.com/yyzquwu/did-it-search/v0.5.0/docs/ignored-caller.gif)
+![Terminal recording of a skipped caller, its Git ignore rule, and the matching line](https://raw.githubusercontent.com/yyzquwu/did-it-search/v0.6.0/docs/ignored-caller.gif)
 
 ## Explain a search in your own repository
 
@@ -23,7 +56,7 @@ uvx did-it-search explain load_settings . --glob '*.py'
 For a persistent CLI installation, use Python 3.11+:
 
 ```sh
-python -m pip install did-it-search==0.5.0
+python -m pip install did-it-search==0.6.0
 ```
 
 From the root of this checkout, try the same search twice:
@@ -54,7 +87,7 @@ The GitHub Action checks the Pi SDK installed in your project against a reviewed
 From a project with a local installation of `@earendil-works/pi-coding-agent`, install the kit and record today's behavior. Use Python 3.11+, Git, ripgrep on PATH, and Node 22.19+ (Node 24 recommended).
 
 ```sh
-python -m pip install "git+https://github.com/yyzquwu/did-it-search.git@v0.5.0"
+python -m pip install "git+https://github.com/yyzquwu/did-it-search.git@v0.6.0"
 did-it-search baseline --tool pi
 did-it-search compare --tool pi
 ```
@@ -69,7 +102,7 @@ In a pull-request workflow with `contents: read`, set up Node and ripgrep and in
     fetch-depth: 0
     persist-credentials: false
 - run: npm ci
-- uses: yyzquwu/did-it-search@v0.5.0
+- uses: yyzquwu/did-it-search@v0.6.0
 ```
 
 On a PR the Action compares the candidate's installed SDK with the baseline from the PR's base commit. A contributor can inspect the package versions, request, expected result and native tool response in the job summary. New regressions and changed failures exit 1. Improvements and known failures pass. An incompatible baseline or a tool that couldn't run exits 2. Use `compare --json` to consume the comparison outside GitHub. The existing `check` command still grades absolute conformance.
@@ -84,7 +117,7 @@ Baseline and comparison evidence displays temporary fixture roots as `<fixture>`
 Install Git, ripgrep (`rg`), and Node.js 22.19+ (tested with Node 24). With `uvx` available, run:
 
 ```sh
-uvx --from git+https://github.com/yyzquwu/did-it-search.git@v0.5.0 did-it-search replay pi
+uvx --from git+https://github.com/yyzquwu/did-it-search.git@v0.6.0 did-it-search replay pi
 ```
 
 The replay runs Pi's grep implementation from both sides of [the merged fix](https://github.com/earendil-works/pi/pull/11895) on two fixtures. Both requests ask for the literal `hello` under `repo` with the glob `migrations/main/*.js`. One fixture has the match at `repo/migrations/main/a.js`. The other puts the only match under `repo/nested/migrations/main/b.js`, outside the requested glob. That second case catches a fix that simply widens the search. Add `--json` to inspect the results.
