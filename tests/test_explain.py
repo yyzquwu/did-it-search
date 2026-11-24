@@ -1,6 +1,7 @@
 import json
 import os
 import shutil
+import subprocess
 import unittest
 from contextlib import chdir
 from pathlib import Path
@@ -22,13 +23,21 @@ class ExplainTests(unittest.TestCase):
         return path
 
     def check(self, status, count, pattern="needle", path=".", glob=None, **kwargs):
+        return self.report(status, count, pattern, path, glob, **kwargs)["detail"]
+
+    def report(self, status, count, pattern="needle", path=".", glob=None, **kwargs):
         kwargs.setdefault("timeout", 20.0)
         result = explain(pattern, self.root / path, glob, **kwargs)
-        self.assertEqual(set(result), {"status", "detail", "files_searched"})
+        self.assertEqual(set(result), {"status", "detail", "files_searched", "skipped_paths", "coverage_complete"})
         self.assertEqual((result["status"], result["files_searched"]), (status, count), result)
         self.assertTrue(result["detail"])
+        self.assertIsInstance(result["coverage_complete"], bool)
         self.assertEqual(json.loads(json.dumps(result)), result)
-        return result["detail"]
+        return result
+
+    @staticmethod
+    def skip(path, kind, is_dir=False, rule=None):
+        return dict(path=path, kind=kind, is_dir=is_dir, rule=rule)
 
     def test_literal_case_and_exact_count(self):
         self.put("plain.txt", b"-needle[.]\nsecond\n")
@@ -177,7 +186,7 @@ class ExplainTests(unittest.TestCase):
             (self.root / "scope" / "link").symlink_to(self.root / "outside", target_is_directory=True)
         except (NotImplementedError, OSError) as exc:
             self.skipTest(f"Cannot create a directory symlink: {exc}")
-        self.check("no_match", 1, path="scope")
+        self.assertEqual(self.report("no_match", 1, path="scope")["skipped_paths"], [])
         self.check("error", None, path="scope/link/file.txt")
 
     def test_unreadable_file_keeps_count_unknown_and_preserves_a_confirmed_hit(self):
@@ -206,4 +215,83 @@ class ExplainTests(unittest.TestCase):
         with patch("diditsearch.explain._PROCESS_LIMIT", 2):
             self.assertIn("process limit", self.check("partial", None))
         with patch("diditsearch.explain._PROCESS_LIMIT", 3):
-            self.assertIn("process limit", self.check("matched", 1))
+            report = self.report("matched", 1)
+            self.assertIn("process limit", report["detail"])
+            self.assertFalse(report["coverage_complete"])
+
+    def test_accounting_flags_and_observed_evidence_on_interruption(self):
+        self.put(".gitignore", b"generated/\n")
+        self.put("generated/client.ts", b"needle")
+        self.put("a.txt", b"needle")
+        self.put("b.txt", b"\0needle")
+        self.assertFalse(self.report("missing_path", 0, path="missing")["coverage_complete"])
+        self.assertFalse(self.report("partial", None, timeout=0)["coverage_complete"])
+        self.assertTrue(self.report("no_files", 0, glob="*.rs")["coverage_complete"])
+        with patch("diditsearch.explain._PROCESS_LIMIT", 4):
+            report = self.report("matched", 1)
+        self.assertFalse(report["coverage_complete"])
+        self.assertEqual(report["skipped_paths"], [self.skip("generated/client.ts", "ignored"),
+                                                   self.skip("b.txt", "binary")])
+
+    def test_hidden_directory_and_binary_are_reported_separately(self):
+        self.put(".gitignore", b"other/\n")
+        self.put(".git/metadata.txt", b"needle")
+        self.put("nested/.github/workflows/ci.yml", b"needle")
+        self.put("visible/.a.txt", b"needle")
+        self.put("visible/.b.txt", b"needle")
+        self.put("z.bin", b"\x00needle")
+        self.put("a.txt", b"other")
+        report = self.report("partial", 1)
+        self.assertTrue(report["coverage_complete"])
+        self.assertEqual(report["skipped_paths"], [self.skip("nested/.github", "hidden", True),
+                                                   self.skip("z.bin", "binary"),
+                                                   self.skip("visible/.a.txt", "hidden")])
+        report = self.report("no_files", 0, path="nested")
+        self.assertTrue(report["coverage_complete"])
+        self.assertEqual(report["skipped_paths"], [self.skip(".github", "hidden", True)])
+        report = self.report("matched", 1, path="nested/.github")
+        self.assertEqual(report["skipped_paths"], [])
+
+    def test_grouping_is_stable_and_keeps_single_ignored_file(self):
+        self.put(".gitignore", b"generated/\ncache-*/\n")
+        self.put("generated/client.ts", b"needle")
+        self.put("cache-b/sub/b.ts", b"needle")
+        self.put("cache-b/a.ts", b"needle")
+        self.put("cache-a/a.ts", b"needle")
+        self.put("cache-a/b.ts", b"needle")
+        self.put("visible.txt", b"other")
+        expected = [self.skip("cache-a", "ignored", True), self.skip("cache-b", "ignored", True),
+                    self.skip("generated/client.ts", "ignored")]
+        for _ in range(2):
+            report = self.report("partial", 1)
+            self.assertTrue(report["coverage_complete"])
+            self.assertEqual(report["skipped_paths"], expected)
+
+    def test_a_subtree_with_searched_files_keeps_specific_ignored_examples(self):
+        self.put(".gitignore", b"*.generated.ts\n")
+        self.put("src/a.generated.ts", b"needle")
+        self.put("src/b.generated.ts", b"needle")
+        self.put("src/app.ts", b"other")
+        self.assertEqual(self.report("partial", 1)["skipped_paths"], [
+            self.skip("src/a.generated.ts", "ignored"), self.skip("src/b.generated.ts", "ignored"),
+        ])
+
+    def test_explicit_file_paths_are_relative_to_parent(self):
+        self.put(".gitignore", b"generated/\n")
+        self.put("generated/client.ts", b"needle")
+        report = self.report("partial", 0, path="generated/client.ts")
+        self.assertEqual(report["skipped_paths"], [self.skip("client.ts", "ignored")])
+        report = self.report("no_files", 0, path="generated/client.ts", glob="*.rs")
+        self.assertEqual(report["skipped_paths"], [self.skip("client.ts", "excluded")])
+
+    @unittest.skipUnless(shutil.which("git"), "Git is unavailable")
+    def test_ignored_caller_gets_verified_rule_in_git_repository(self):
+        subprocess.run(["git", "init", "-q", str(self.root)], check=True, capture_output=True, timeout=10)
+        self.put(".gitignore", b"# generated SDK\ngenerated/\n")
+        self.put("generated/client.ts", b"legacy_export();\n")
+        self.put("app.ts", b"startServer();\n")
+        report = self.report("partial", 1, "legacy_export")
+        self.assertTrue(report["coverage_complete"])
+        self.assertEqual(report["skipped_paths"], [self.skip("generated/client.ts", "ignored", rule={
+            "source": ".gitignore", "line": 2, "pattern": "generated/",
+        })])

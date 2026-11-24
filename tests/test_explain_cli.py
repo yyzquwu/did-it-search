@@ -135,6 +135,106 @@ class ExplainCliTests(unittest.TestCase):
         self.assertEqual((run.returncode, run.stderr), (1, b""))
         self.assertIsNone(json.loads(run.stdout)["follow_up_argv"])
 
+    def test_ignored_file_follow_up_is_opt_in_and_respects_the_requested_path(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            subprocess.run(["git", "init", "-q", "--template="], cwd=root, check=True)
+            (root / ".gitignore").write_bytes(b"/source/-\n")
+            (root / "source").mkdir()
+            (root / "source" / "-").write_bytes(b"-needle\nsecond\n")
+            (root / "source" / "visible").write_bytes(b"other\n")
+            for cwd, path, expected in ((root, "source", "source/-"), (root, "source/-", "source/-"),
+                                        (root / "source", "-", "./-")):
+                with self.subTest(path=path):
+                    args = ("--", "-needle\nsecond", path)
+                    run = self.run_cli("--json", *args, cwd=cwd)
+                    self.assertEqual((run.returncode, run.stderr), (2, b""))
+                    report = json.loads(run.stdout)
+                    self.assertTrue(report["coverage_complete"])
+                    self.assertEqual(report["skipped_paths"], [{
+                        "path": "-", "kind": "ignored", "is_dir": False,
+                        "rule": {"source": ".gitignore", "line": 1, "pattern": "/source/-"},
+                    }])
+                    argv = report["follow_up_argv"]
+                    self.assertEqual(argv[0], _rg_path())
+                    self.assertEqual(argv[-4:], ["--multiline", "--", "-needle\nsecond", expected])
+                    hit = subprocess.run(argv, cwd=cwd, capture_output=True, timeout=20)
+                    self.assertEqual((hit.returncode, hit.stderr), (0, b""))
+                    self.assertIn(b":1:-needle", hit.stdout)
+                    human = self.run_cli(*args, cwd=cwd)
+                    self.assertEqual((human.returncode, human.stdout), (2, b""))
+                    self.assertIn(b".gitignore:1  /source/-", human.stderr)
+                    self.assertIn(b"Use --json", human.stderr)
+                    self.assertNotIn(b":1:-needle", human.stderr)
+
+    def test_hidden_file_follow_up_round_trips_in_the_shell(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            name = ".- dir '$(echo injected) & echo bad; %TEMP% [x]"
+            pattern = '-text " & echo unexpected; \\' + "'$(echo injected) " + chr(96)
+            (root / name).write_text(pattern + "\n", encoding="utf-8")
+            run = self.run_cli("--", pattern, ".", cwd=root)
+            self.assertEqual((run.returncode, run.stderr), (1, b""))
+            self.assertIn(b" (hidden)", run.stdout)
+            self.assertNotIn(b":1:", run.stdout)
+            command = run.stdout.decode().splitlines()[-1].strip()
+            hit = self.run_shell(command, root)
+            self.assertEqual((hit.returncode, hit.stderr), (0, b""))
+            self.assertEqual(hit.stdout.splitlines(), [f"{name}:1:{pattern}".encode()])
+
+    def test_no_follow_up_for_grouped_or_binary_skips_or_a_confirmed_hit(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / ".ignore").write_bytes(b"generated/\nignored.txt\n")
+            (root / "generated").mkdir()
+            for name in ("generated/a.txt", "generated/b.txt", "ignored.txt"):
+                (root / name).write_bytes(b"needle\n")
+            (root / "binary.txt").write_bytes(b"\x00needle")
+            (root / "visible.txt").write_bytes(b"needle\n")
+            hit = json.loads(self.run_cli("needle", "--json", cwd=root).stdout)
+            self.assertEqual(hit["status"], "matched")
+            self.assertIsNone(hit["follow_up_argv"])
+            (root / "visible.txt").unlink()
+            (root / "ignored.txt").unlink()
+            miss = json.loads(self.run_cli("needle", "--json", cwd=root).stdout)
+            self.assertEqual(miss["status"], "partial")
+            self.assertEqual({(s["kind"], s["is_dir"]) for s in miss["skipped_paths"]},
+                             {("ignored", True), ("binary", False)})
+            self.assertIsNone(miss["follow_up_argv"])
+
+    def test_follow_up_rechecks_the_candidate_is_an_ordinary_file_in_scope(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp, "scope")
+            root.mkdir()
+            (root / "directory").mkdir()
+            (root / ".git").mkdir()
+            outside = Path(tmp, "outside")
+            outside.write_bytes(b"needle")
+            (root / ".git" / "metadata").write_bytes(b"needle")
+            try:
+                (root / "link").symlink_to(outside)
+            except OSError as exc:
+                self.skipTest(f"Cannot create a symbolic link: {exc}")
+            report = dict(status="partial", detail="Some files were skipped.", files_searched=0)
+            for path in ("directory", ".git/metadata", "../outside", "link"):
+                entry = dict(path=path, kind="ignored", is_dir=False, rule=None)
+                with (self.subTest(path=path), redirect_stdout(StringIO()) as out,
+                      patch("diditsearch.explain_cli._explain", return_value=dict(report, skipped_paths=[entry]))):
+                    self.assertEqual(main(["explain", "--json", "needle", str(root)]), 2)
+                    self.assertIsNone(json.loads(out.getvalue())["follow_up_argv"])
+
+    def test_skip_diagnostics_escape_control_characters(self):
+        report = dict(status="partial", detail="Search incomplete.", files_searched=1,
+                      coverage_complete=True, skipped_paths=[{
+                          "path": "first\nsecond\x1b[0m", "kind": "ignored", "is_dir": False,
+                          "rule": {"source": "\u202e.gitignore", "line": 2, "pattern": "pat\ttern"},
+                      }])
+        with patch("diditsearch.explain_cli._explain", return_value=report), redirect_stderr(StringIO()) as err:
+            self.assertEqual(main(["explain", "needle"]), 2)
+        self.assertIn(r"Skipped: first\nsecond\x1b[0m (ignored)", err.getvalue())
+        self.assertIn(r"Rule: \u202e.gitignore:2  pat\ttern", err.getvalue())
+        self.assertEqual(len(err.getvalue().splitlines()), 4)
+
     def test_invalid_timeout_has_a_json_diagnostic(self):
         for value in ("-1", "nan", "inf"):
             with self.subTest(value=value):

@@ -1,10 +1,11 @@
 """Small repositories with independently specified search outcomes."""
 
 import os
-import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
+
+from .evidence_rules import _git_path
 
 
 @dataclass(frozen=True)
@@ -17,12 +18,12 @@ class Case:
     skipped: tuple[str, ...] = ()
 
 
-def make_fixtures(root: Path) -> list[Case]:
-    """Populate a new or empty directory with eight independent Git repositories."""
+def make_fixtures(root: Path, *, only: str | None = None) -> list[Case]:
+    """Create the independent fixture repositories, optionally selecting one by ID."""
     root.mkdir(exist_ok=True)
     if any(root.iterdir()):
         raise ValueError(f"Fixture root must be empty: {root}")
-    git = shutil.which("git")
+    git = _git_path()
     if not git:
         raise OSError("Git (git) must be available on PATH to create the fixtures")
 
@@ -56,6 +57,8 @@ def make_fixtures(root: Path) -> list[Case]:
     ]
     cases = []
     for id_, pattern, path, glob, expected, reason, files in specs:
+        if only is not None and id_ != only:
+            continue
         case_root = root / id_
         case_root.mkdir()
         subprocess.run(

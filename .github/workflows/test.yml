@@ -28,6 +28,7 @@ jobs:
         run: if (-not (Get-Command rg -ErrorAction SilentlyContinue)) { choco install ripgrep -y }
       - run: python -m pip install .
       - run: python -I -m unittest discover -s tests
+      - run: did-it-search demo
       - name: Verify the installed explain quickstart
         shell: python
         run: |

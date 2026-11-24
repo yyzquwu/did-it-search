@@ -5,17 +5,45 @@ import os
 import stat
 import subprocess
 import time
+from heapq import nsmallest
+from itertools import chain
 from pathlib import Path
 from threading import Thread
+from typing import Literal, TypedDict
 
 _OUTPUT_LIMIT = 4 * 1024 * 1024
 _PROCESS_LIMIT = 64
 _ARG_LIMIT = 24_000
 _METADATA = ("--iglob" if os.name == "nt" else "--glob", "!**/.git")
 _IGNORE_MARKERS = (".rgignore", ".ignore", ".gitignore", ".git")
+_CONTROL_NAMES = set(map(Path, _IGNORE_MARKERS))
 _IS_RESERVED = getattr(os.path, "isreserved", lambda name: Path(name).is_reserved())
 _LIST = ("--files", "--null")
 _SCAN = ("--no-mmap", "--null")
+_EXAMPLE_LIMIT = 3
+
+SkipKind = Literal["ignored", "hidden", "binary", "excluded"]
+
+
+class IgnoreRule(TypedDict):
+    source: str
+    line: int
+    pattern: str
+
+
+class SkippedPath(TypedDict):
+    path: str
+    kind: SkipKind
+    is_dir: bool
+    rule: IgnoreRule | None
+
+
+class ExplainReport(TypedDict):
+    status: Literal["matched", "no_match", "no_files", "missing_path", "partial", "error"]
+    detail: str
+    files_searched: int | None
+    skipped_paths: list[SkippedPath]
+    coverage_complete: bool
 
 
 class _Incomplete(Exception):
@@ -205,11 +233,79 @@ def _batches(files, base, limit):
         yield batch
 
 
-def _result(status, detail, files_searched=None):
-    return {"status": status, "detail": detail, "files_searched": files_searched}
+def _skip(base, path, kind, *, is_dir=False) -> SkippedPath:
+    return {"path": path.relative_to(base).as_posix(), "kind": kind, "is_dir": is_dir, "rule": None}
 
 
-def explain(pattern, path=".", glob=None, *, timeout=5.0):
+def _sample(base, selected, skipped, binaries, remaining):
+    # Group a wholly skipped subtree when it contains multiple ignored files or
+    # starts at a dot directory where hidden filtering skipped its descendants.
+    dirs = {}
+    if skipped:
+        for path in selected:
+            remaining()
+            if Path(path.name) in _CONTROL_NAMES:
+                continue
+            kind = skipped.get(path)
+            for parent in path.parents:
+                if parent == base:
+                    break
+                size, prev = dirs.get(parent, (0, kind))
+                dirs[parent] = size + 1, kind if kind == prev else None
+
+    examples = {"ignored": set(), "hidden": set(), "binary": {(p, False) for p in binaries}}
+    for path, kind in skipped.items():
+        remaining()
+        if Path(path.name) in _CONTROL_NAMES:
+            continue
+        representative = path
+        for parent in path.parents:
+            if parent == base:
+                break
+            size, group = dirs[parent]
+            if kind == group and (parent.name.startswith(".") if kind == "hidden" else size > 1):
+                representative = parent
+        examples[kind].add((representative, representative != path))
+
+    # Give each observed reason a place before taking more examples of the same kind.
+    ranked = [(kind, nsmallest(_EXAMPLE_LIMIT, items, key=lambda item: item[0].as_posix()))
+              for kind, items in examples.items()]
+    return [_skip(base, paths[i][0], kind, is_dir=paths[i][1])
+            for i in range(_EXAMPLE_LIMIT) for kind, paths in ranked if i < len(paths)][:_EXAMPLE_LIMIT]
+
+
+def _attribute(rg, root, base, examples):
+    if not rg.runs or not (root / ".git").exists():
+        return
+    paths = {}
+    for item in examples:
+        if item["kind"] != "ignored":
+            continue
+        path = base / item["path"]
+        parents = chain((path,), path.parents) if item["is_dir"] else path.parents
+        for parent in parents:
+            rg.remaining()
+            if parent == root:
+                paths[path] = item
+                break
+            if (parent / ".git").exists():
+                # A rule in the nested repository cannot explain a parent walk
+                # pruning that repository before its own rules were loaded.
+                break
+    if paths:
+        from .evidence_rules import git_rules
+
+        rg.runs -= 1
+        for path, rule in git_rules(paths, root, rg.remaining).items():
+            paths[path]["rule"] = rule
+
+
+def _result(status, detail, files_searched=None, *, skipped_paths=(), coverage_complete=False) -> ExplainReport:
+    return {"status": status, "detail": detail, "files_searched": files_searched,
+            "skipped_paths": list(skipped_paths), "coverage_complete": coverage_complete}
+
+
+def explain(pattern, path=".", glob=None, *, timeout=5.0) -> ExplainReport:
     """Explain a local search without reading the contents of ignored or linked files.
 
     Directories use directory-relative globs and ripgrep's default hidden-file rules
@@ -219,22 +315,37 @@ def explain(pattern, path=".", glob=None, *, timeout=5.0):
     metadata is excluded, and .gitignore applies even without a Git repository.
 
     files_searched counts eligible text files searched, including empty files. NUL
-    bytes after ripgrep's default decoding indicate binary data. An excluded input
-    makes a miss partial. A confirmed text match takes precedence over exclusions
-    and incomplete coverage. The count is unknown if the eligible search is interrupted.
+    bytes after ripgrep's default decoding indicate binary data. Ignored or binary
+    inputs in the selected scope make a miss partial. Default hidden filtering
+    retains its original search status. A confirmed text match takes precedence
+    over exclusions and interruptions. The count is unknown if the eligible search
+    is interrupted.
 
-    One deadline covers all ripgrep phases, with a shared 4 MiB output budget and
-    at most 64 serial invocations. Coverage describes the files observed during
-    the search, which can change while the search is running.
+    skipped_paths contains up to three observed examples, relative to the requested
+    directory or the explicit file's parent, with POSIX separators. Ignored paths
+    failed the ignore-aware selection, hidden paths were omitted by the default
+    hidden filter, binary files contained NUL bytes, and an excluded explicit file
+    failed the requested glob. Directory examples represent skipped descendants.
+    Git metadata, links and ignore control files are omitted from examples. A rule
+    is optional and, when verified, gives its repository-relative POSIX source,
+    one-based line number and pattern. coverage_complete indicates that the engine
+    finished exclusion accounting within the requested scope, including binary
+    classification. It can be true when some files were skipped and false when a
+    match and search count are known. Optional rule attribution does not affect it.
+
+    One deadline covers all phases, with a shared 4 MiB ripgrep output budget and
+    at most 64 serial process invocations. Coverage describes the files observed
+    during the search, which can change while the search is running.
     """
     return _explain(pattern, path, glob, timeout=timeout, executable=_rg_path())
 
 
 def _explain(pattern, path, glob, *, timeout, executable):
     started = time.monotonic()
-    matched, searched, excluded, binary = False, 0, 0, 0
+    matched, searched, binary = False, 0, 0
     target = None
     count = None
+    examples, binaries = [], []
     try:
         path = os.fspath(path)
         if (not isinstance(pattern, str) or not isinstance(path, str) or not path
@@ -248,7 +359,7 @@ def _explain(pattern, path, glob, *, timeout, executable):
         if not directory and not target.is_file():
             raise ValueError("Search path must be a regular file or directory.")
         if Path(".git") in map(Path, target.parts):
-            return _result("no_files", "Git metadata is outside the search scope.", 0)
+            return _result("no_files", "Git metadata is outside the search scope.", 0, coverage_complete=True)
         rg = _Ripgrep(started + timeout, executable)
         base = target if directory else target.parent
         root = _walk_root(base)
@@ -280,6 +391,10 @@ def _explain(pattern, path, glob, *, timeout, executable):
             text = _names(out)
             if code in (0, 1) and not err:
                 binary += len(batch) - len(text)
+                names = (base / name for name in map(Path, batch)
+                         if name not in text and Path(name.name) not in _CONTROL_NAMES)
+                binaries = nsmallest(_EXAMPLE_LIMIT, chain(binaries, names), key=Path.as_posix)
+                examples = [_skip(base, name, "binary") for name in binaries]
             else:
                 incomplete = True
             paths = [name for name in batch if Path(name) in text]
@@ -293,22 +408,49 @@ def _explain(pattern, path, glob, *, timeout, executable):
         count = searched
         # Count excluded names after searching so a large ignored tree cannot hide a verified hit.
         selected = scope | _selected(rg, target, directory, glob) if directory else scope
-        if not selected:
-            return _result("no_files", "No files were selected by the requested scope.", 0)
-        excluded = len(selected - eligible)
+        ignored = selected - eligible
+        skipped = dict.fromkeys(ignored, "ignored")
+        examples = _sample(base, selected, skipped, binaries, rg.remaining)
+        hidden = set()
+        if directory:
+            all_selected = _files(rg, target, "--no-ignore", "--hidden", *glob_args) | selected
+            hidden = {p for p in all_selected - selected if Path(p.name) not in _CONTROL_NAMES}
+            if hidden:
+                skipped.update(dict.fromkeys(hidden, "hidden"))
+                examples = _sample(base, all_selected, skipped, binaries, rg.remaining)
+        elif not selected and Path(target.name) not in _CONTROL_NAMES:
+            examples = [_skip(base, target, "excluded")]
+        rg.remaining()
     except (FileNotFoundError, NotADirectoryError):
         if target is None:
             return _result("missing_path", "The requested path does not exist.", 0)
-        return _result("matched" if matched else "partial", "The search scope changed during the search.", count)
+        return _result("matched" if matched else "partial", "The search scope changed during the search.", count,
+                       skipped_paths=examples)
     except _Incomplete as exc:
         detail = f"Found a literal match. {exc}" if matched else str(exc)
-        return _result("matched" if matched else "partial", detail, count)
-    except (OSError, ValueError, TypeError) as exc:
-        return _result("error", str(exc))
+        return _result("matched" if matched else "partial", detail, count, skipped_paths=examples)
+    except OSError as exc:
+        status = "matched" if matched else "partial" if count is not None else "error"
+        return _result(status, str(exc), count, skipped_paths=examples)
+    except (ValueError, TypeError) as exc:
+        return _result("error", str(exc), skipped_paths=examples)
+
+    if any(item["kind"] == "ignored" for item in examples):
+        try:
+            _attribute(rg, root, base, examples)
+        except (_Incomplete, OSError):
+            pass  # Optional provenance can run out of time after exclusions are accounted for.
+    if not selected:
+        detail = "No files were selected by the requested scope."
+        if hidden:
+            detail += f" Files skipped ({len(hidden)} hidden)."
+        return _result("no_files", detail, 0, skipped_paths=examples, coverage_complete=True)
 
     notes = []
-    if excluded:
-        notes.append(f"{excluded} ignored or hidden")
+    if ignored:
+        notes.append(f"{len(ignored)} ignored")
+    if hidden:
+        notes.append(f"{len(hidden)} hidden")
     if binary:
         notes.append(f"{binary} binary")
     detail = "Found no literal match in the searched text files." if searched else "No eligible text files were searched."
@@ -316,4 +458,5 @@ def _explain(pattern, path, glob, *, timeout, executable):
         detail = "Found a literal match."
     if notes:
         detail += " Files skipped (" + ", ".join(notes) + ")."
-    return _result("matched" if matched else "partial" if notes else "no_match", detail, searched)
+    status = "matched" if matched else "partial" if ignored or binary else "no_match"
+    return _result(status, detail, searched, skipped_paths=examples, coverage_complete=True)

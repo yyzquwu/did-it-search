@@ -4,13 +4,12 @@ import json
 import os
 import subprocess
 import sys
-from contextlib import contextmanager
+from contextlib import chdir, contextmanager
 from importlib.metadata import version
 from pathlib import Path
 from tempfile import NamedTemporaryFile, TemporaryDirectory
 
 from .fixtures import make_fixtures
-from .reference import inspect_search
 from .runner import run_checks
 
 
@@ -47,19 +46,33 @@ def _export(dest: Path) -> None:
 
 
 def _demo(cases) -> None:
+    from .explain_cli import _diagnose, _render, _rg_path, _shell_command
+
     case = next(c for c in cases if c.id == "ignored-caller")
-    cmd = ["rg", "--no-config", "-F", "--", case.request["pattern"], "."]
-    try:
-        raw = subprocess.run(cmd, cwd=case.root, capture_output=True, check=False)
-    except FileNotFoundError as exc:
-        raise OSError("ripgrep (rg) must be available on PATH") from exc
-    if raw.returncode not in (0, 1):
-        raise ValueError(raw.stderr.decode("utf-8", "replace").strip() or "ripgrep could not run")
-    answer = inspect_search(case.root, case.request)
-    print("$", " ".join(cmd))
-    print(f"exit {raw.returncode} | stdout: {raw.stdout.decode('utf-8', 'replace').strip() or '(empty)'}")
-    print(f"Scope: {answer['status']} | {answer['detail']}")
-    print(f"Fixture answer: {case.reason}")
+    exe = _rg_path()
+    if not exe:
+        raise OSError("ripgrep (rg) must be available on PATH")
+    pattern = case.request["pattern"]
+    search = ["--no-config", "-F", "--", pattern, "."]
+    with chdir(case.root):
+        raw = subprocess.run([exe, *search], stdin=subprocess.DEVNULL, capture_output=True, timeout=5)
+        if raw.returncode != 1 or raw.stdout or raw.stderr:
+            raise ValueError("The demo search did not produce the expected empty result.")
+        print("$", _shell_command(["rg", *search]))
+        print("exit 1 | stdout: (empty)")
+        print(f"\n$ did-it-search explain {pattern} .")
+        report = _diagnose(pattern, ".", executable=exe)
+        _render(report, sys.stdout, display_exe="rg")
+        follow_up = report["follow_up_argv"]
+        caller = "generated/client.ts"
+        if (not follow_up or Path(follow_up[-1]) != Path(caller)
+                or not any(s["path"] == caller and s["rule"] for s in report["skipped_paths"])):
+            raise ValueError("The demo did not identify its ignored caller.")
+        print("\nRunning the suggested command in the temporary demo repository.")
+        hit = subprocess.run(follow_up, stdin=subprocess.DEVNULL, capture_output=True, timeout=5)
+        if hit.returncode or not hit.stdout or hit.stderr:
+            raise ValueError("The demo follow-up did not find the expected caller.")
+        print(hit.stdout.decode("utf-8").rstrip())
 
 
 def _replay_pi(as_json: bool) -> int:
@@ -205,10 +218,10 @@ def main(argv=None) -> int:
             _export(args.directory)
             return 0
         with _workspace() as tmp:
-            cases = make_fixtures(tmp)
             if args.cmd == "demo":
-                _demo(cases)
+                _demo(make_fixtures(tmp, only="ignored-caller"))
                 return 0
+            cases = make_fixtures(tmp)
             adapter = args.adapter
             env = None
             if args.case_ids:

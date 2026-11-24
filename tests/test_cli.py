@@ -24,10 +24,6 @@ class CliTests(unittest.TestCase):
     def test_installed_workflow_and_ci_exits(self):
         with TemporaryDirectory() as tmp:
             dest = Path(tmp, "fixtures with spaces")
-            demo = self.run_cli("demo", cwd=tmp)
-            self.assertEqual(demo.returncode, 0, demo.stderr)
-            for term in (b"exit 1", b"(empty)", b"partial", b"generated/client.ts"):
-                self.assertIn(term, demo.stdout)
             report = self.run_cli("check", "--json", cwd=tmp)
             self.assertEqual((report.returncode, json.loads(report.stdout)["passed"]), (0, 8))
             standalone = self.run_cli("check", "--json", "--adapter",
@@ -51,6 +47,27 @@ class CliTests(unittest.TestCase):
             sentinel.write_bytes(b"preserve")
             self.assertEqual(self.run_cli("fixtures", str(dest)).returncode, 2)
             self.assertEqual(sentinel.read_bytes(), b"preserve")
+
+    def test_installed_demo_walks_through_a_temporary_repository(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            temp = root / "demo workspaces"
+            temp.mkdir()
+            sentinel = root / "app.ts"
+            sentinel.write_bytes(b"legacy_export();\n")
+            env = dict(os.environ, TMPDIR=str(temp), TEMP=str(temp), TMP=str(temp),
+                       GIT_DIR=str(root / "unrelated.git"))
+            demo = self.run_cli("demo", cwd=root, env=env)
+            self.assertEqual((demo.returncode, demo.stderr), (0, b""))
+            output = demo.stdout.decode().replace("\\", "/")
+            order = ["exit 1 | stdout: (empty)", "did-it-search explain legacy_export .",
+                     "partial", "Skipped: generated/client.ts (ignored)", ".gitignore:1  generated/",
+                     "To check only that file", "temporary demo repository", "generated/client.ts:1:legacy_export();"]
+            indexes = [output.index(part) for part in order]
+            self.assertEqual(indexes, sorted(indexes))
+            self.assertEqual(list(temp.iterdir()), [])
+            self.assertEqual(set(root.iterdir()), {temp, sentinel})
+            self.assertEqual(sentinel.read_bytes(), b"legacy_export();\n")
 
     def test_distinguishes_why_each_search_was_partial(self):
         with TemporaryDirectory() as tmp:
