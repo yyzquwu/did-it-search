@@ -12,6 +12,6 @@ export default function (pi: ExtensionAPI) {
   pi.on("before_agent_start", (event) => {
     nativeGrep = !!native.promptSnippet && event.systemPromptOptions?.toolSnippets?.grep === native.promptSnippet;
   });
-  pi.on("agent_end", () => { nativeGrep = false; });
+  pi.on("agent_settled", () => { nativeGrep = false; });
   pi.on("tool_result", (event, ctx) => nativeGrep ? hook(event, ctx) : undefined);
 }

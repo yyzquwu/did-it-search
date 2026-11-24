@@ -143,13 +143,15 @@ async function createHarness({ sdk, ai, Agent }, scratch, cwd, enabled, manifest
   assert.deepEqual(session.getActiveToolNames(), ['grep']);
   assert.equal(session.getAllTools().find((tool) => tool.name === 'grep')?.sourceInfo.path, 'builtin:grep');
   let sequence = 0;
-  async function run(input) {
+  async function run(input, { retry = false } = {}) {
     const call = `grep-${++sequence}`;
     const events = [];
     let providerResult;
     let start;
     let elapsed;
+    let retried = false;
     const unsubscribe = session.subscribe((event) => {
+      if (event.type === 'auto_retry_start') retried = true;
       if (event.toolCallId !== call) return;
       if (event.type === 'tool_execution_start') start = performance.now();
       if (event.type === 'tool_execution_end') {
@@ -158,6 +160,7 @@ async function createHarness({ sdk, ai, Agent }, scratch, cwd, enabled, manifest
       }
     });
     faux.setResponses([
+      ...(retry ? [ai.fauxAssistantMessage('', { stopReason: 'error', errorMessage: '503 Service Unavailable' })] : []),
       ai.fauxAssistantMessage(ai.fauxToolCall('grep', { literal: true, ...input }, { id: call }), { stopReason: 'toolUse' }),
       (context) => {
         providerResult = context.messages.find((msg) => msg.role === 'toolResult' && msg.toolCallId === call);
@@ -166,6 +169,7 @@ async function createHarness({ sdk, ai, Agent }, scratch, cwd, enabled, manifest
     ]);
     try {
       await session.prompt('Run the scripted grep.');
+      assert.equal(retried, retry, 'Unexpected Pi retry behavior');
       assert.deepEqual(extensionErrors, [], 'Pi reported an extension error');
       assert.equal(faux.getPendingResponseCount(), 0, 'The scripted turns did not finish');
       assert.equal(events.length, 1, 'Expected one Pi tool_execution_end event');
@@ -267,6 +271,9 @@ async function verifyResults(pi, scratch, cwd, manifest) {
         console.log(`  grep ${JSON.stringify({ literal: true, ...input })}\n  Pi only: ${text(native)}\n  With extension: ${found}`);
       }
     }
+    const afterRetry = await on.run(scenarios.ignored, { retry: true });
+    assert.match(text(afterRetry.result), /Skipped "generated\/ignored-caller\.ts"/);
+    console.log('Stock grep after a transient model error: PASS');
   });
 }
 
